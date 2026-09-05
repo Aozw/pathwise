@@ -1,37 +1,49 @@
-"""Graph wiring — W1.2, the skeleton.
-
-Every node here is either a stub (agents/*.py) or a temporary placeholder defined
-inline below. Nothing is real yet; the point of this module is that the edges, the
-conditional fan-out and the refine loop with its hard cap all exist and run end to
-end, so Aaron has something deployable while W1.3-W1.6 and W2.1-W2.5 fill the nodes
-in on separate branches.
+"""Graph wiring — W1.2 skeleton, W1.4's real score node.
 
 Flow:
     START -> profile -> planner -> (fan out on dispatch) -> module / event / project
            -> score -> refine_gate -> planner (loop, capped) or END
 
-Two nodes below are temporary and live in this file rather than their eventual home:
+One node below is still a temporary placeholder living here rather than its eventual
+home: `profile`. src/agents/profile.py is Stevson/Aaron's (W3.1-W3.3) and is empty
+right now. This file cannot depend on it without breaking the graph, and W1/W2
+ownership does not extend to writing that node. Replace `_profile_stub` with an
+import of `profile_node` from src.agents.profile once W3.1 lands.
 
-  * profile: src/agents/profile.py is Stevson's (W3.1-W3.3) and is empty right now.
-    This file cannot depend on it without breaking the graph, and W2 ownership does not
-    extend to writing Stevson's node. Replace `_profile_stub` with an import of
-    `profile_node` from src.agents.profile once W3.1 lands.
-  * score: src/scoring.py is W1.4, not yet built. `_score_stub` is a pure pass-through
-    that does not write `state["ranked"]` at all yet. The real score node will populate
-    `ranked` (plain last-write-wins) rather than rewriting `candidates` (operator.add) -
-    see the RunState docstring in state.py for why the two fields are split.
+`score` is real (see `_score_node` below). It calls Bedrock once per scoring pass -
+a single batched call judging every candidate, not one call each - for the two
+model-produced components (gap_coverage, role_fit), then calls scoring.compose_score
+(pure, W1.4) for the rest. Writes `ranked`, not `candidates`: see the RunState
+docstring in state.py for why the two fields are split.
 """
 
 from __future__ import annotations
 
+from typing import Any
+
+import boto3
+from botocore.config import Config as BotoConfig
+from botocore.exceptions import BotoCoreError, ClientError
 from langgraph.graph import END, START, StateGraph
+from pydantic import BaseModel, Field, ValidationError
 
 from src.agents.event import event_node
 from src.agents.module import module_node
 from src.agents.planner import planner_node
 from src.agents.project import project_node
-from src.config import DEFAULT_ROLE, MAX_REFINE_ITERATIONS
+from src.config import (
+    AWS_REGION,
+    DEFAULT_ROLE,
+    MAX_CANDIDATES_SCORED,
+    MAX_REFINE_ITERATIONS,
+    MODEL_HAIKU,
+    SCORE_THRESHOLD,
+    TOOL_RETRIES,
+    TOOL_TIMEOUT_SECONDS,
+)
+from src.scoring import compose_score
 from src.state import (
+    Candidate,
     Dimension,
     DimensionScore,
     Gap,
@@ -96,20 +108,176 @@ def _fan_out(state: RunState) -> list[str]:
     return nodes or ["score"]  # nothing dispatched: skip straight to scoring
 
 
-def _score_stub(state: RunState) -> dict:
-    """Temporary placeholder — see module docstring."""
-    count = len(state.get("candidates", []))
-    return {
-        "trace": [
+_SCORE_TOOL_NAME = "score_candidates"
+
+_SCORE_TOOL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "judgments": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "candidate_id": {"type": "string"},
+                    "gap_coverage": {"type": "number", "minimum": 0, "maximum": 1},
+                    "role_fit": {"type": "number", "minimum": 0, "maximum": 1},
+                    "rationale": {"type": "string"},
+                },
+                "required": ["candidate_id", "gap_coverage", "role_fit", "rationale"],
+            },
+            "description": "One judgment per candidate, in the same order given.",
+        },
+    },
+    "required": ["judgments"],
+}
+
+# boto's own retry machinery is disabled (max_attempts=1); the retry loop in
+# _call_score_bedrock is explicit so a final failure is observable and can write its
+# own TraceEvent, matching the pattern in agents/planner.py.
+_SCORE_BOTO_CONFIG = BotoConfig(
+    connect_timeout=TOOL_TIMEOUT_SECONDS,
+    read_timeout=TOOL_TIMEOUT_SECONDS,
+    retries={"max_attempts": 1},
+)
+
+_score_client: Any = None
+
+
+def _score_bedrock() -> Any:
+    global _score_client
+    if _score_client is None:
+        _score_client = boto3.client(
+            "bedrock-runtime", region_name=AWS_REGION, config=_SCORE_BOTO_CONFIG
+        )
+    return _score_client
+
+
+class _Judgment(BaseModel):
+    candidate_id: str
+    gap_coverage: float = Field(ge=0.0, le=1.0)
+    role_fit: float = Field(ge=0.0, le=1.0)
+    rationale: str
+
+
+class _ScoreDecision(BaseModel):
+    judgments: list[_Judgment]
+
+
+def _build_score_prompt(
+    candidates: list[Candidate], profile: StudentProfile, readiness: Readiness
+) -> str:
+    gap_lines = "\n".join(
+        f"  {gap.priority}. {gap.label} ({gap.dimension}): "
+        f"current {gap.current:.2f}, target {gap.target:.2f}"
+        for gap in readiness.gaps
+    )
+    candidate_lines = "\n".join(
+        f"  {c.id} [{c.kind}] {c.title} - claims to close: {', '.join(c.closes_gaps) or 'unspecified'}\n"
+        f"    {c.description[:200]}"
+        for c in candidates
+    )
+    return (
+        f"Student targeting {profile.target_role}.\n"
+        f"Ranked priority gaps (1 is highest):\n{gap_lines}\n\n"
+        f"Candidates to judge:\n{candidate_lines}\n\n"
+        "For every candidate above, give gap_coverage (0-1: how much it would actually "
+        "close the priority gaps above, not just what it claims) and role_fit (0-1: how "
+        "well it fits the target role), each with a one-sentence rationale. Call "
+        "score_candidates with exactly one judgment per candidate id listed above."
+    )
+
+
+def _call_score_bedrock(prompt: str) -> _ScoreDecision:
+    last_error: Exception | None = None
+    for _ in range(1 + TOOL_RETRIES):
+        try:
+            response = _score_bedrock().converse(
+                modelId=MODEL_HAIKU,
+                messages=[{"role": "user", "content": [{"text": prompt}]}],
+                toolConfig={
+                    "tools": [
+                        {
+                            "toolSpec": {
+                                "name": _SCORE_TOOL_NAME,
+                                "description": "Record gap_coverage and role_fit for every "
+                                "candidate given.",
+                                "inputSchema": {"json": _SCORE_TOOL_SCHEMA},
+                            }
+                        }
+                    ],
+                    "toolChoice": {"tool": {"name": _SCORE_TOOL_NAME}},
+                },
+                inferenceConfig={"temperature": 0, "maxTokens": 4000},
+            )
+            for block in response["output"]["message"]["content"]:
+                if "toolUse" in block:
+                    return _ScoreDecision.model_validate(block["toolUse"]["input"])
+            raise ValueError("model did not call the score_candidates tool")
+        except (ClientError, BotoCoreError, ValidationError, ValueError, KeyError) as exc:
+            last_error = exc
+    raise RuntimeError(f"score Bedrock call failed after retry: {last_error}") from last_error
+
+
+def _score_node(state: RunState) -> dict:
+    """Real W1.4 score node: one batched Bedrock call for gap_coverage/role_fit, then
+    scoring.compose_score (pure) for time_cost, redundancy_penalty and the weighted
+    total. Writes `ranked`, fully replacing it - never `candidates`.
+    """
+    candidates = state.get("candidates", [])[:MAX_CANDIDATES_SCORED]
+    profile = state["profile"]
+    readiness = state["readiness"]
+
+    if not candidates:
+        return {
+            "ranked": [],
+            "trace": [
+                TraceEvent(
+                    kind=TraceKind.DECIDED, agent="Career Agent", message="No candidates to score"
+                )
+            ],
+        }
+
+    trace: list[TraceEvent] = []
+    try:
+        decision = _call_score_bedrock(_build_score_prompt(candidates, profile, readiness))
+        judgments = {j.candidate_id: j for j in decision.judgments}
+    except RuntimeError as exc:
+        judgments = {}
+        trace.append(
             TraceEvent(
                 kind=TraceKind.DECIDED,
                 agent="Career Agent",
-                message=f"Scoring stub: {count} candidates passed through unscored",
-                detail="Real scoring composition (gap coverage + role fit from the model, "
-                "time cost + redundancy penalty + weighted sum in Python) is W1.4.",
+                message="Scoring fell back to neutral defaults for every candidate",
+                detail=str(exc),
             )
-        ]
-    }
+        )
+
+    ranked: list[Candidate] = []
+    for candidate in candidates:
+        judgment = judgments.get(candidate.id)
+        if judgment is None:
+            gap_coverage, role_fit = 0.5, 0.5
+            rationale = "Fallback: no model judgment for this candidate."
+        else:
+            gap_coverage, role_fit, rationale = (
+                judgment.gap_coverage,
+                judgment.role_fit,
+                judgment.rationale,
+            )
+        scores = compose_score(candidate, profile, gap_coverage, role_fit, rationale)
+        if scores.total >= SCORE_THRESHOLD:
+            ranked.append(candidate.model_copy(update={"scores": scores}))
+
+    ranked.sort(key=lambda c: c.scores.total, reverse=True)
+    trace.append(
+        TraceEvent(
+            kind=TraceKind.DECIDED,
+            agent="Career Agent",
+            message=f"Scored {len(candidates)} candidates, {len(ranked)} above threshold "
+            f"{SCORE_THRESHOLD}",
+        )
+    )
+    return {"ranked": ranked, "trace": trace}
 
 
 def _refine_gate(state: RunState) -> dict:
@@ -145,7 +313,7 @@ def build_graph():
     builder.add_node("module", module_node)
     builder.add_node("event", event_node)
     builder.add_node("project", project_node)
-    builder.add_node("score", _score_stub)
+    builder.add_node("score", _score_node)
     builder.add_node("refine_gate", _refine_gate)
 
     builder.add_edge(START, "profile")
