@@ -10,7 +10,7 @@ import math
 
 from src.config import MAX_TIME_COST_HOURS, SCORE_WEIGHTS, TIME_COST_HOURS
 from src.scoring import compose_score, redundancy_penalty, time_cost_score, weighted_total
-from src.state import Candidate, CandidateKind, Evidence, SourceName, StudentProfile
+from src.state import Candidate, CandidateKind, Dimension, Evidence, SourceName, StudentProfile
 
 
 def _candidate(**overrides) -> Candidate:
@@ -44,31 +44,54 @@ def test_time_cost_score_is_clamped_to_zero_and_one():
     assert time_cost_score(_candidate(time_cost_hours=MAX_TIME_COST_HOURS * 5)) == 0.0
 
 
+_SYSTEMS_GAP = {"Distributed systems": Dimension.SYSTEMS}
+
+
 def test_redundancy_penalty_zero_when_no_gaps_claimed():
-    assert redundancy_penalty(_candidate(closes_gaps=[]), _profile()) == 0.0
+    assert redundancy_penalty(_candidate(closes_gaps=[]), _profile(), {}) == 0.0
 
 
-def test_redundancy_penalty_zero_when_evidence_does_not_overlap():
+def test_redundancy_penalty_zero_when_evidence_is_in_a_different_dimension():
     candidate = _candidate(closes_gaps=["Distributed systems"])
-    profile = _profile(evidence=[Evidence(label="rest api", dimension="programming", source_text="x")])
-    assert redundancy_penalty(candidate, profile) == 0.0
+    profile = _profile(
+        evidence=[Evidence(label="rest api", dimension=Dimension.PROGRAMMING, source_text="x")]
+    )
+    assert redundancy_penalty(candidate, profile, _SYSTEMS_GAP) == 0.0
 
 
-def test_redundancy_penalty_one_when_fully_covered_by_evidence():
-    candidate = _candidate(closes_gaps=["rest api"])
-    profile = _profile(evidence=[Evidence(label="rest api", dimension="programming", source_text="x")])
-    assert redundancy_penalty(candidate, profile) == 1.0
+def test_redundancy_penalty_one_when_every_closed_gap_dimension_has_evidence():
+    candidate = _candidate(closes_gaps=["Distributed systems"])
+    profile = _profile(
+        evidence=[Evidence(label="ran a raft cluster", dimension=Dimension.SYSTEMS, source_text="x")]
+    )
+    assert redundancy_penalty(candidate, profile, _SYSTEMS_GAP) == 1.0
 
 
-def test_redundancy_penalty_is_the_overlap_fraction():
-    candidate = _candidate(closes_gaps=["rest api", "distributed systems", "sql"])
+def test_redundancy_penalty_is_the_covered_dimension_fraction():
+    candidate = _candidate(
+        closes_gaps=["Distributed systems", "Data pipelines", "Build tooling"]
+    )
+    gap_dimensions = {
+        "Distributed systems": Dimension.SYSTEMS,
+        "Data pipelines": Dimension.DATA,
+        "Build tooling": Dimension.TOOLING,
+    }
     profile = _profile(
         evidence=[
-            Evidence(label="rest api", dimension="programming", source_text="x"),
-            Evidence(label="sql", dimension="data", source_text="y"),
+            Evidence(label="raft cluster", dimension=Dimension.SYSTEMS, source_text="x"),
+            Evidence(label="etl job", dimension=Dimension.DATA, source_text="y"),
         ]
     )
-    assert math.isclose(redundancy_penalty(candidate, profile), 2 / 3)
+    assert math.isclose(redundancy_penalty(candidate, profile, gap_dimensions), 2 / 3)
+
+
+def test_redundancy_penalty_zero_when_closed_gaps_are_not_in_the_map():
+    # The model returned a label the run's readiness never produced.
+    candidate = _candidate(closes_gaps=["Gap that does not exist"])
+    profile = _profile(
+        evidence=[Evidence(label="x", dimension=Dimension.SYSTEMS, source_text="x")]
+    )
+    assert redundancy_penalty(candidate, profile, _SYSTEMS_GAP) == 0.0
 
 
 def test_weighted_total_matches_config_weights_directly():
@@ -88,14 +111,16 @@ def test_weighted_total_all_zero_inputs_is_zero():
 
 
 def test_compose_score_fills_every_component():
-    candidate = _candidate(closes_gaps=["distributed systems"], time_cost_hours=60.0)
+    candidate = _candidate(closes_gaps=["Distributed systems"], time_cost_hours=60.0)
     profile = _profile()
-    scores = compose_score(candidate, profile, gap_coverage=0.9, role_fit=0.7, rationale="closes the top gap")
+    scores = compose_score(
+        candidate, profile, 0.9, 0.7, _SYSTEMS_GAP, rationale="closes the top gap"
+    )
 
     assert scores.gap_coverage == 0.9
     assert scores.role_fit == 0.7
     assert math.isclose(scores.time_cost, time_cost_score(candidate))
-    assert scores.redundancy_penalty == redundancy_penalty(candidate, profile)
+    assert scores.redundancy_penalty == redundancy_penalty(candidate, profile, _SYSTEMS_GAP)
     assert math.isclose(
         scores.total,
         weighted_total(0.9, 0.7, scores.time_cost, scores.redundancy_penalty),
@@ -104,7 +129,5 @@ def test_compose_score_fills_every_component():
 
 
 def test_compose_score_does_not_fabricate_a_rationale():
-    candidate = _candidate()
-    profile = _profile()
-    scores = compose_score(candidate, profile, gap_coverage=0.5, role_fit=0.5)
+    scores = compose_score(_candidate(), _profile(), 0.5, 0.5, {})
     assert scores.rationale == ""
