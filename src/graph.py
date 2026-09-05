@@ -1,8 +1,8 @@
-"""Graph wiring — W1.2 skeleton, W1.4's real score node.
+"""Graph wiring — W1.2 skeleton, W1.4's real score node, W1.5's refine loop + act node.
 
 Flow:
     START -> profile -> planner -> (fan out on dispatch) -> module / event / project
-           -> score -> refine_gate -> planner (loop, capped) or END
+           -> score -> refine_gate -> planner (loop, capped) or act -> END
 
 One node below is still a temporary placeholder living here rather than its eventual
 home: `profile`. src/agents/profile.py is Stevson/Aaron's (W3.1-W3.3) and is empty
@@ -15,18 +15,41 @@ a single batched call judging every candidate, not one call each - for the two
 model-produced components (gap_coverage, role_fit), then calls scoring.compose_score
 (pure, W1.4) for the rest. Writes `ranked`, not `candidates`: see the RunState
 docstring in state.py for why the two fields are split.
+
+`act` is real too (W1.5). It proposes one PendingAction per ranked candidate, then
+calls `interrupt()` and pauses the whole graph until a human resumes it with which
+ids to approve. This needs a checkpointer to survive the pause, so `build_graph()`
+compiles with `InMemorySaver`. IMPORTANT for W4.4 (Aaron's "approve" endpoint):
+InMemorySaver only survives within one process's memory. It is fine for local dev and
+for a single long-lived process, but a resume arriving as a separate serverless
+invocation (a fresh Lambda/AgentCore container) will not find the paused state. That
+persistence problem belongs to W1.6 (S3 state snapshot) or a follow-up - not solved
+here, flagged so W4.4 does not build the approve endpoint assuming resume "just works"
+across invocations.
+
+The checkpointer's serializer refuses to silently deserialize our own Pydantic/enum
+types by default in a future langgraph-checkpoint version (currently just a warning:
+"Deserializing unregistered type ... This will be blocked in a future version").
+`_CHECKPOINT_MSGPACK_ALLOWLIST` below allow-lists every class actually defined in
+state.py, built by introspecting the module rather than hand-listing types, so it
+can't go stale as the frozen contract gets amended.
 """
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 import boto3
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import BotoCoreError, ClientError
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import interrupt
 from pydantic import BaseModel, Field, ValidationError
 
+from src import state as _state_module
 from src.agents.event import event_node
 from src.agents.module import module_node
 from src.agents.planner import planner_node
@@ -37,6 +60,7 @@ from src.config import (
     MAX_CANDIDATES_SCORED,
     MAX_REFINE_ITERATIONS,
     MODEL_HAIKU,
+    NEVER_AUTOMATED_ACTIONS,
     SCORE_THRESHOLD,
     TOOL_RETRIES,
     TOOL_TIMEOUT_SECONDS,
@@ -47,12 +71,19 @@ from src.state import (
     Dimension,
     DimensionScore,
     Gap,
+    PendingAction,
     Readiness,
     RunState,
     StudentProfile,
     TraceEvent,
     TraceKind,
 )
+
+_CHECKPOINT_MSGPACK_ALLOWLIST = [
+    obj
+    for _, obj in inspect.getmembers(_state_module, inspect.isclass)
+    if obj.__module__ == _state_module.__name__
+]
 
 # Maps the display names the planner writes into `dispatch` (config.AGENT_NAMES) onto
 # the graph node keys those agents actually run as.
@@ -302,7 +333,68 @@ def _should_refine(state: RunState) -> str:
     """
     has_new_outcome = bool(state.get("outcomes"))
     under_cap = state.get("iteration", 0) < MAX_REFINE_ITERATIONS
-    return "planner" if (has_new_outcome and under_cap) else END
+    return "planner" if (has_new_outcome and under_cap) else "act"
+
+
+def _act_node(state: RunState) -> dict:
+    """Approval interrupt before acting — W1.5.
+
+    Proposes one PendingAction per ranked candidate, then calls interrupt() and pauses
+    the whole graph for a human decision. On resume, executes only what was actually
+    approved. NEVER_AUTOMATED_ACTIONS is enforced here in code, not just documented:
+    nothing a resume payload claims can force through a submit_application-type action,
+    so the hard rule in CLAUDE.md holds even against a malformed or malicious resume.
+    """
+    ranked = state.get("ranked", [])
+    proposed = [
+        PendingAction(
+            id=f"action:{candidate.id}",
+            action_type="add_to_roadmap",
+            label=f"Add '{candidate.title}' to the roadmap",
+            candidate_id=candidate.id,
+            auto_approvable=True,
+        )
+        for candidate in ranked
+    ]
+
+    if not proposed:
+        return {
+            "pending": [],
+            "trace": [
+                TraceEvent(
+                    kind=TraceKind.ACTION,
+                    agent="Career Agent",
+                    message="No ranked candidates to propose actions for",
+                )
+            ],
+        }
+
+    decision = interrupt(
+        {
+            "kind": "approve_actions",
+            "actions": [action.model_dump(mode="json") for action in proposed],
+        }
+    )
+    requested_ids = set(decision.get("approved", [])) if isinstance(decision, dict) else set()
+
+    by_id = {action.id: action for action in proposed}
+    approved = [
+        action_id
+        for action_id in requested_ids
+        if action_id in by_id and by_id[action_id].action_type not in NEVER_AUTOMATED_ACTIONS
+    ]
+
+    return {
+        "pending": proposed,
+        "approved": approved,
+        "trace": [
+            TraceEvent(
+                kind=TraceKind.ACTION,
+                agent="Career Agent",
+                message=f"Approved {len(approved)} of {len(proposed)} proposed actions",
+            )
+        ],
+    }
 
 
 def build_graph():
@@ -315,6 +407,7 @@ def build_graph():
     builder.add_node("project", project_node)
     builder.add_node("score", _score_node)
     builder.add_node("refine_gate", _refine_gate)
+    builder.add_node("act", _act_node)
 
     builder.add_edge(START, "profile")
     builder.add_edge("profile", "planner")
@@ -329,9 +422,11 @@ def build_graph():
     builder.add_edge("project", "score")
 
     builder.add_edge("score", "refine_gate")
-    builder.add_conditional_edges("refine_gate", _should_refine, ["planner", END])
+    builder.add_conditional_edges("refine_gate", _should_refine, ["planner", "act"])
+    builder.add_edge("act", END)
 
-    return builder.compile()
+    serde = JsonPlusSerializer(allowed_msgpack_modules=_CHECKPOINT_MSGPACK_ALLOWLIST)
+    return builder.compile(checkpointer=InMemorySaver(serde=serde))
 
 
 graph = build_graph()
