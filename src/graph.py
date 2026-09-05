@@ -278,11 +278,11 @@ def _score_node(state: RunState) -> dict:
     total. Writes `ranked`, fully replacing it - never `candidates`.
 
     The model also returns `closed_gaps` per candidate - the gap labels it genuinely
-    closes - which is written onto the candidate so redundancy_penalty (set logic in
-    scoring.py against StudentProfile.evidence_labels) has something to work with. The
-    upstream half of that intersection - normalising resume evidence onto the same gap
-    label vocabulary - is W3.2/W3.3 and is a documented simplification until those land:
-    today evidence is empty, so the penalty is 0, but the wiring is live.
+    closes - which is written onto the candidate. scoring.redundancy_penalty then
+    matches those gaps' Dimensions against the Dimensions the student already holds
+    evidence in (StudentProfile.evidence). Until W3.2/W3.3 populate `evidence` the
+    penalty evaluates to 0, but the path is live and the matching is dimension-based,
+    so it does not depend on resume text and gap labels sharing a vocabulary.
     """
     candidates = state.get("candidates", [])[:MAX_CANDIDATES_SCORED]
     profile = state["profile"]
@@ -298,7 +298,7 @@ def _score_node(state: RunState) -> dict:
             ],
         }
 
-    gap_labels = {gap.label for gap in readiness.gaps}
+    gap_dimensions = {gap.label: gap.dimension for gap in readiness.gaps}
     metrics = state.get("metrics") or RunMetrics()
 
     trace: list[TraceEvent] = []
@@ -333,9 +333,11 @@ def _score_node(state: RunState) -> dict:
             # Keep only labels that are real priority gaps - the model occasionally
             # paraphrases or invents one, and a bad label would silently distort the
             # redundancy penalty.
-            closed_gaps = [label for label in judgment.closed_gaps if label in gap_labels]
+            closed_gaps = [label for label in judgment.closed_gaps if label in gap_dimensions]
         scored = candidate.model_copy(update={"closes_gaps": closed_gaps})
-        scores = compose_score(scored, profile, gap_coverage, role_fit, rationale)
+        scores = compose_score(
+            scored, profile, gap_coverage, role_fit, gap_dimensions, rationale
+        )
         if scores.total >= SCORE_THRESHOLD:
             ranked.append(scored.model_copy(update={"scores": scores}))
 

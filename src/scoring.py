@@ -10,8 +10,10 @@ fixtures, no network, no Bedrock.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from src.config import MAX_TIME_COST_HOURS, SCORE_WEIGHTS, TIME_COST_HOURS
-from src.state import Candidate, ScoreComponents, StudentProfile
+from src.state import Candidate, Dimension, ScoreComponents, StudentProfile
 
 
 def time_cost_score(candidate: Candidate) -> float:
@@ -28,15 +30,31 @@ def time_cost_score(candidate: Candidate) -> float:
     return max(0.0, min(1.0, 1.0 - hours / MAX_TIME_COST_HOURS))
 
 
-def redundancy_penalty(candidate: Candidate, profile: StudentProfile) -> float:
-    """1.0 is fully redundant: every gap this candidate claims to close is already
-    covered by evidence the student holds. 0.0 is entirely new ground. A candidate
-    that closes no gaps at all is not redundant, just unscored on that axis.
+def redundancy_penalty(
+    candidate: Candidate,
+    profile: StudentProfile,
+    gap_dimensions: Mapping[str, Dimension],
+) -> float:
+    """1.0 is fully redundant: every gap this candidate closes sits in a readiness
+    dimension the student already holds evidence in. 0.0 is entirely new ground. A
+    candidate that closes no gaps is not redundant, just unscored on this axis.
+
+    Matched at Dimension granularity, not on gap-label strings. Gap labels are free
+    text the readiness model produces per run ("Distributed systems"); resume evidence
+    is classified independently; the two would never string-match. Both Gap.dimension
+    and Evidence.dimension are the closed five-value Dimension enum, so they can.
+    `gap_dimensions` maps each Gap.label to its Dimension - the score node builds it
+    from the run's readiness.
     """
     if not candidate.closes_gaps:
         return 0.0
-    already_covered = set(candidate.closes_gaps) & profile.evidence_labels
-    return len(already_covered) / len(candidate.closes_gaps)
+    closed_dimensions = {
+        gap_dimensions[label] for label in candidate.closes_gaps if label in gap_dimensions
+    }
+    if not closed_dimensions:
+        return 0.0
+    evidence_dimensions = {item.dimension for item in profile.evidence}
+    return len(closed_dimensions & evidence_dimensions) / len(closed_dimensions)
 
 
 def weighted_total(
@@ -58,13 +76,15 @@ def compose_score(
     profile: StudentProfile,
     gap_coverage: float,
     role_fit: float,
+    gap_dimensions: Mapping[str, Dimension],
     rationale: str = "",
 ) -> ScoreComponents:
     """Combine the model-produced gap_coverage/role_fit with the two components
-    computed here into one ScoreComponents, with the weighted total.
+    computed here into one ScoreComponents, with the weighted total. `gap_dimensions`
+    maps Gap.label to Dimension for the redundancy penalty - see redundancy_penalty.
     """
     time_cost = time_cost_score(candidate)
-    penalty = redundancy_penalty(candidate, profile)
+    penalty = redundancy_penalty(candidate, profile, gap_dimensions)
     total = weighted_total(gap_coverage, role_fit, time_cost, penalty)
     return ScoreComponents(
         gap_coverage=gap_coverage,
