@@ -1,0 +1,152 @@
+{
+  "description": "W3.5 evaluation set for prerequisite eligibility. Ten constructed NUS student progressions, a dozen modules whose prereqTree is either verbatim from a live NUSMods modules/{code}.json response (see `source`) or a representative structure built from the same grammar, and hand-verified expected answers for is_eligible(). Every `expected_eligible` was worked out by reading the tree against the student's completed list; the `reason` records that working so a wrong answer is easy to audit. `grammar` tags the tree feature each case exercises, so the report can break accuracy down by construct.",
+  "modules": [
+    {
+      "code": "CS3210",
+      "title": "Parallel Computing",
+      "source": "live modules/CS3210.json",
+      "prereq_tree": { "or": ["CS2100", "CS2106"] }
+    },
+    {
+      "code": "CS2106",
+      "title": "Introduction to Operating Systems",
+      "source": "representative: CS2100 plus a programming-methodology-II equivalent",
+      "prereq_tree": {
+        "and": ["CS2100", { "or": ["CS2030", "CS2030S", "CS2113", "CS2113T"] }]
+      }
+    },
+    {
+      "code": "CS2103T",
+      "title": "Software Engineering",
+      "source": "representative: any programming-methodology-II equivalent",
+      "prereq_tree": { "or": ["CS2030", "CS2030S", "CS2113", "CS2113T"] }
+    },
+    {
+      "code": "CS3230",
+      "title": "Design and Analysis of Algorithms",
+      "source": "representative: a data-structures equivalent and a discrete-maths equivalent",
+      "prereq_tree": {
+        "and": [
+          { "or": ["CS2040", "CS2040S", "CS2040C"] },
+          { "or": ["CS1231", "CS1231S", "MA1100"] }
+        ]
+      }
+    },
+    {
+      "code": "CS4225",
+      "title": "Big Data Systems for Data Science",
+      "source": "live modules/CS4225.json",
+      "prereq_tree": { "or": ["CS2102:D", "IT2002:D"] }
+    },
+    {
+      "code": "CS4243",
+      "title": "Computer Vision and Pattern Recognition",
+      "source": "live modules/CS4243.json (copied verbatim)",
+      "prereq_tree": {
+        "and": [
+          { "or": ["YSC2232:D", "MA2001:D", "MA1101R:D", "MA1311:D", "MA1508E:D", "MA1513:D", "MA1522:D"] },
+          { "or": ["ST1131:D", "ST1131A:D", "ST1232:D", "ST2131:D", "MA2116:D", "MA2116T:D", "MA2216:D", "EE2012A:D", "EE2012:D", "ST2334:D", "YSC2243:D"] },
+          { "or": ["CS2030:D", "CS2030S:D", "CS2030DE:D", "CS2113:D", "CS2113T:D"] },
+          { "or": ["YSC2229:D", "CS2040:D", "CS2040S:D", "CS2040DE:D", "CS2040C:D", "CS2040HS:D"] },
+          { "or": ["MA1102R:D", "MA2002:D", "YSC1216:D", "MA1505:D", "MA1521:D", "MA1507:D", { "nOf": [2, ["MA1512:D", "MA1511:D"]] }] }
+        ]
+      }
+    },
+    {
+      "code": "BT4222",
+      "title": "Mining Web Data for Business Insights",
+      "source": "live modules/BT4222.json (copied verbatim)",
+      "prereq_tree": {
+        "or": [
+          {
+            "and": [
+              { "or": ["CS1010:D", "CS1010E:D", "CS1101S:D", "CS1010J:D", "CS1010S:D", "CS1010X:D", "CS1010A:D", "CS1010HS:D", "UTC2851:D"] },
+              { "nOf": [2, ["BT2101:D", "BT2102:D"]] }
+            ]
+          },
+          { "nOf": [3, ["DAO2702:D", "DBA3803:D", "IT3010:D"]] }
+        ]
+      }
+    },
+    {
+      "code": "ACC2727",
+      "title": "Corporate Accounting",
+      "source": "live modules/ACC2727.json: ACC1701 family wildcard or EC2204, at grade D",
+      "prereq_tree": { "or": ["ACC1701%:D", "EC2204:D"] }
+    },
+    {
+      "code": "DSA3101",
+      "title": "Data Science in Practice",
+      "source": "representative: a single statistics module at grade C or better",
+      "prereq_tree": "ST2131:C"
+    },
+    {
+      "code": "CS1101S",
+      "title": "Programming Methodology",
+      "source": "live: an introductory module with no prerequisite tree",
+      "prereq_tree": null
+    },
+    {
+      "code": "MA3269",
+      "title": "Mathematical Finance",
+      "source": "representative: at least two of three calculus/linear-algebra modules at grade D",
+      "prereq_tree": { "nOf": [2, ["MA1512:D", "MA1511:D", "MA1521:D"]] }
+    },
+    {
+      "code": "CS4269",
+      "title": "Fundamentals of Logic in Computer Science",
+      "source": "representative: a data-structures module plus a cohort/admission-year restriction (an unrecognised node shape is_eligible treats as satisfied)",
+      "prereq_tree": {
+        "and": ["CS2040S", { "cohort": { "rule": "MUST_BE_IN", "years": ["S:2017"] } }]
+      }
+    }
+  ],
+  "students": [
+    { "id": "y1-sem1-cs", "completed": [["CS1101S", "A-"], ["MA1521", "B"], ["GEA1000", "A"]] },
+    { "id": "y1-complete-cs", "completed": [["CS1101S", "A-"], ["CS1231S", "B+"], ["CS2040S", "B+"], ["MA1521", "B"], ["MA1522", "B-"], ["GEA1000", "A"]] },
+    { "id": "y2-cs-core", "completed": [["CS1101S", "A-"], ["CS1231S", "B+"], ["CS2030S", "A-"], ["CS2040S", "B+"], ["CS2100", "B+"], ["CS2103T", "A-"], ["CS2101", "B+"], ["ST2334", "B"]] },
+    { "id": "y2-cs-plus-os", "completed": [["CS1101S", "A-"], ["CS1231S", "B+"], ["CS2030S", "A-"], ["CS2040S", "B+"], ["CS2100", "B+"], ["CS2103T", "A-"], ["CS2101", "B+"], ["ST2334", "B"], ["CS2106", "B+"], ["CS2105", "B"]] },
+    { "id": "y3-cs-broad", "completed": [["CS1101S", "A-"], ["CS1231S", "B+"], ["CS2030S", "A-"], ["CS2040S", "B+"], ["CS2100", "B+"], ["CS2103T", "A-"], ["CS2101", "B+"], ["ST2334", "B"], ["CS2106", "B+"], ["CS2105", "B"], ["CS2102", "B"], ["ST2131", "C"], ["MA2001", "B"]] },
+    { "id": "business-analytics-y2", "completed": [["BT2101", "B"], ["BT2102", "B"], ["CS1010", "C"], ["DAO2702", "B"]] },
+    { "id": "analytics-alt-path", "completed": [["DAO2702", "B"], ["DBA3803", "B"], ["IT3010", "B"]] },
+    { "id": "accountancy-y1", "completed": [["ACC1701C", "B"], ["EC2204", "B"]] },
+    { "id": "math-cs-double", "completed": [["MA1511", "B"], ["MA1512", "B"], ["MA2001", "B"], ["ST1131", "B"], ["CS2030", "B"], ["CS2040", "B"]] },
+    { "id": "transfer-exemptions", "completed": [["CS2100", null], ["CS2106", null]] }
+  ],
+  "cases": [
+    { "student": "y1-sem1-cs", "module": "CS3210", "expected_eligible": false, "grammar": "or", "reason": "has neither CS2100 nor CS2106" },
+    { "student": "y1-sem1-cs", "module": "CS1101S", "expected_eligible": true, "grammar": "none", "reason": "no prerequisite tree" },
+    { "student": "y1-sem1-cs", "module": "CS2103T", "expected_eligible": false, "grammar": "or", "reason": "no CS2030/CS2030S/CS2113/CS2113T" },
+    { "student": "y1-sem1-cs", "module": "MA3269", "expected_eligible": false, "grammar": "nOf", "reason": "only MA1521 of the three; nOf needs 2" },
+    { "student": "y1-sem1-cs", "module": "CS2106", "expected_eligible": false, "grammar": "and", "reason": "no CS2100, so the and fails regardless of the or branch" },
+    { "student": "y1-sem1-cs", "module": "ACC2727", "expected_eligible": false, "grammar": "wildcard", "reason": "no ACC1701-family module and no EC2204" },
+    { "student": "y1-complete-cs", "module": "CS3230", "expected_eligible": true, "grammar": "and", "reason": "CS2040S satisfies the data-structures or; CS1231S satisfies the discrete-maths or" },
+    { "student": "y1-complete-cs", "module": "CS3210", "expected_eligible": false, "grammar": "or", "reason": "still no CS2100 or CS2106" },
+    { "student": "y1-complete-cs", "module": "CS2106", "expected_eligible": false, "grammar": "and", "reason": "no CS2100" },
+    { "student": "y1-complete-cs", "module": "CS4225", "expected_eligible": false, "grammar": "graded_leaf", "reason": "no CS2102 or IT2002" },
+    { "student": "y2-cs-core", "module": "CS3210", "expected_eligible": true, "grammar": "or", "reason": "has CS2100 (B+)" },
+    { "student": "y2-cs-core", "module": "CS2106", "expected_eligible": true, "grammar": "and", "reason": "CS2100 (B+) and CS2030S (A-) satisfy both halves of the and" },
+    { "student": "y2-cs-core", "module": "CS2103T", "expected_eligible": true, "grammar": "or", "reason": "has CS2030S" },
+    { "student": "y2-cs-core", "module": "CS4225", "expected_eligible": false, "grammar": "graded_leaf", "reason": "no CS2102 or IT2002" },
+    { "student": "y2-cs-core", "module": "CS4269", "expected_eligible": true, "grammar": "cohort", "reason": "CS2040S (B+) satisfied; the cohort node is an unrecognised shape treated as satisfied" },
+    { "student": "y2-cs-core", "module": "CS4243", "expected_eligible": false, "grammar": "nested", "reason": "first or-branch needs one of YSC2232/MA2001/MA1101R/MA1311/MA1508E/MA1513/MA1522 at D; student has none" },
+    { "student": "y2-cs-core", "module": "DSA3101", "expected_eligible": false, "grammar": "graded_leaf", "reason": "no ST2131" },
+    { "student": "y2-cs-plus-os", "module": "CS3210", "expected_eligible": true, "grammar": "or", "reason": "has both CS2100 and CS2106" },
+    { "student": "y2-cs-plus-os", "module": "CS4243", "expected_eligible": false, "grammar": "nested", "reason": "has CS2030S, CS2040S and ST2334 for three branches, but no maths module at all — the first or-branch (MA2001/MA1522/MA1101R/...) fails, so the outer and fails" },
+    { "student": "y2-cs-plus-os", "module": "DSA3101", "expected_eligible": false, "grammar": "graded_leaf", "reason": "no ST2131" },
+    { "student": "y3-cs-broad", "module": "CS4225", "expected_eligible": true, "grammar": "graded_leaf", "reason": "CS2102 at B meets the D floor" },
+    { "student": "y3-cs-broad", "module": "DSA3101", "expected_eligible": true, "grammar": "graded_leaf", "reason": "ST2131 at C meets the C floor exactly" },
+    { "student": "y3-cs-broad", "module": "CS4269", "expected_eligible": true, "grammar": "cohort", "reason": "CS2040S satisfied; cohort node treated as satisfied" },
+    { "student": "business-analytics-y2", "module": "BT4222", "expected_eligible": true, "grammar": "nested", "reason": "first outer branch: CS1010 (C) satisfies the intro-programming or, and BT2101+BT2102 satisfy the nOf-2" },
+    { "student": "business-analytics-y2", "module": "CS4269", "expected_eligible": false, "grammar": "cohort", "reason": "no CS2040S, so the and fails before the cohort node matters" },
+    { "student": "analytics-alt-path", "module": "BT4222", "expected_eligible": true, "grammar": "nested", "reason": "second outer branch: DAO2702+DBA3803+IT3010 satisfy the nOf-3" },
+    { "student": "math-cs-double", "module": "BT4222", "expected_eligible": false, "grammar": "nested", "reason": "no intro-programming module in the first branch's or, no BT2101/BT2102, and none of DAO2702/DBA3803/IT3010" },
+    { "student": "math-cs-double", "module": "MA3269", "expected_eligible": true, "grammar": "nOf", "reason": "MA1511 and MA1512 give 2 of 3" },
+    { "student": "math-cs-double", "module": "CS3230", "expected_eligible": false, "grammar": "and", "reason": "CS2040 satisfies the first or, but no CS1231/CS1231S/MA1100 for the second" },
+    { "student": "math-cs-double", "module": "CS4243", "expected_eligible": true, "grammar": "nested", "reason": "MA2001, ST1131, CS2030, CS2040 cover four branches; MA1511+MA1512 satisfy the nested nOf-2 in the fifth" },
+    { "student": "accountancy-y1", "module": "ACC2727", "expected_eligible": true, "grammar": "wildcard", "reason": "ACC1701C matches the ACC1701% family wildcard at B, above the D floor" },
+    { "student": "transfer-exemptions", "module": "CS3210", "expected_eligible": true, "grammar": "or", "reason": "CS2100 completed; bare leaf needs completion only, grade is null" },
+    { "student": "transfer-exemptions", "module": "CS2106", "expected_eligible": false, "grammar": "and", "reason": "CS2100 completed but no CS2030/CS2030S/CS2113/CS2113T for the or branch" },
+    { "student": "transfer-exemptions", "module": "CS1101S", "expected_eligible": true, "grammar": "none", "reason": "no prerequisite tree" }
+  ]
+}
