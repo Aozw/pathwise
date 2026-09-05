@@ -65,6 +65,7 @@ from src.config import (
     TOOL_RETRIES,
     TOOL_TIMEOUT_SECONDS,
 )
+from src.metrics import ModelCallStats, apply_model_call, token_usage
 from src.scoring import compose_score
 from src.state import (
     Candidate,
@@ -73,6 +74,7 @@ from src.state import (
     Gap,
     PendingAction,
     Readiness,
+    RunMetrics,
     RunState,
     StudentProfile,
     TraceEvent,
@@ -227,7 +229,11 @@ def _build_score_prompt(
     )
 
 
-def _call_score_bedrock(prompt: str) -> _ScoreDecision:
+def _call_score_bedrock(prompt: str) -> tuple[_ScoreDecision, ModelCallStats]:
+    """Returns the decision plus this call's metrics contribution (tokens across every
+    attempt, and whether the structured output validated).
+    """
+    stats = ModelCallStats()
     last_error: Exception | None = None
     for _ in range(1 + TOOL_RETRIES):
         try:
@@ -249,11 +255,19 @@ def _call_score_bedrock(prompt: str) -> _ScoreDecision:
                 },
                 inferenceConfig={"temperature": 0, "maxTokens": 4000},
             )
+            input_tokens, output_tokens = token_usage(response)
+            stats.input_tokens += input_tokens
+            stats.output_tokens += output_tokens
             for block in response["output"]["message"]["content"]:
                 if "toolUse" in block:
-                    return _ScoreDecision.model_validate(block["toolUse"]["input"])
+                    decision = _ScoreDecision.model_validate(block["toolUse"]["input"])
+                    stats.schema_validations_passed += 1
+                    return decision, stats
             raise ValueError("model did not call the score_candidates tool")
-        except (ClientError, BotoCoreError, ValidationError, ValueError, KeyError) as exc:
+        except ValidationError as exc:
+            stats.schema_validations_failed += 1
+            last_error = exc
+        except (ClientError, BotoCoreError, ValueError, KeyError) as exc:
             last_error = exc
     raise RuntimeError(f"score Bedrock call failed after retry: {last_error}") from last_error
 
@@ -285,13 +299,15 @@ def _score_node(state: RunState) -> dict:
         }
 
     gap_labels = {gap.label for gap in readiness.gaps}
+    metrics = state.get("metrics") or RunMetrics()
 
     trace: list[TraceEvent] = []
     try:
-        decision = _call_score_bedrock(_build_score_prompt(candidates, profile, readiness))
+        decision, stats = _call_score_bedrock(_build_score_prompt(candidates, profile, readiness))
         judgments = {j.candidate_id: j for j in decision.judgments}
     except RuntimeError as exc:
         judgments = {}
+        stats = ModelCallStats()  # a failed call recorded no tokens or validations
         trace.append(
             TraceEvent(
                 kind=TraceKind.DECIDED,
@@ -332,7 +348,7 @@ def _score_node(state: RunState) -> dict:
             f"{SCORE_THRESHOLD}",
         )
     )
-    return {"ranked": ranked, "trace": trace}
+    return {"ranked": ranked, "trace": trace, "metrics": apply_model_call(metrics, stats)}
 
 
 def _refine_gate(state: RunState) -> dict:

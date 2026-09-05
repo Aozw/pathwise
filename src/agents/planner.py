@@ -25,7 +25,8 @@ from botocore.exceptions import BotoCoreError, ClientError
 from pydantic import BaseModel, ValidationError
 
 from src.config import AGENT_NAMES, AWS_REGION, MODEL_HAIKU, TOOL_RETRIES, TOOL_TIMEOUT_SECONDS
-from src.state import Readiness, RunState, StudentProfile, TraceEvent, TraceKind
+from src.metrics import ModelCallStats, apply_model_call, token_usage
+from src.state import Readiness, RunMetrics, RunState, StudentProfile, TraceEvent, TraceKind
 
 _TOOL_NAME = "plan"
 
@@ -109,7 +110,11 @@ def _build_prompt(profile: StudentProfile, readiness: Readiness) -> str:
     )
 
 
-def _call_bedrock(prompt: str) -> PlannerDecision:
+def _call_bedrock(prompt: str) -> tuple[PlannerDecision, ModelCallStats]:
+    """Returns the decision plus this call's metrics contribution (tokens spent across
+    every attempt, and whether the structured output validated).
+    """
+    stats = ModelCallStats()
     last_error: Exception | None = None
     for _ in range(1 + TOOL_RETRIES):
         try:
@@ -130,11 +135,19 @@ def _call_bedrock(prompt: str) -> PlannerDecision:
                 },
                 inferenceConfig={"temperature": 0, "maxTokens": 500},
             )
+            input_tokens, output_tokens = token_usage(response)
+            stats.input_tokens += input_tokens
+            stats.output_tokens += output_tokens
             for block in response["output"]["message"]["content"]:
                 if "toolUse" in block:
-                    return PlannerDecision.model_validate(block["toolUse"]["input"])
+                    decision = PlannerDecision.model_validate(block["toolUse"]["input"])
+                    stats.schema_validations_passed += 1
+                    return decision, stats
             raise ValueError("model did not call the plan tool")
-        except (ClientError, BotoCoreError, ValidationError, ValueError, KeyError) as exc:
+        except ValidationError as exc:
+            stats.schema_validations_failed += 1
+            last_error = exc
+        except (ClientError, BotoCoreError, ValueError, KeyError) as exc:
             last_error = exc
     raise RuntimeError(f"planner Bedrock call failed after retry: {last_error}") from last_error
 
@@ -151,12 +164,14 @@ def _fallback_decision() -> PlannerDecision:
 def planner_node(state: RunState) -> dict:
     profile = state["profile"]
     readiness = state["readiness"]
+    metrics = state.get("metrics") or RunMetrics()
 
     trace: list[TraceEvent] = []
     try:
-        decision = _call_bedrock(_build_prompt(profile, readiness))
+        decision, stats = _call_bedrock(_build_prompt(profile, readiness))
     except RuntimeError as exc:
         decision = _fallback_decision()
+        stats = ModelCallStats()  # a failed call recorded no tokens or validations
         trace.append(
             TraceEvent(
                 kind=TraceKind.PLANNED,
@@ -165,6 +180,7 @@ def planner_node(state: RunState) -> dict:
                 detail=str(exc),
             )
         )
+    metrics = apply_model_call(metrics, stats)
 
     trace.append(
         TraceEvent(
@@ -188,6 +204,7 @@ def planner_node(state: RunState) -> dict:
         "dispatch": decision.dispatch,
         "skipped": [skip.agent for skip in decision.skip],
         "trace": trace,
+        "metrics": metrics,
     }
 
 
