@@ -4,3 +4,4 @@ langgraph>=0.2
 requests>=2.31
 numpy>=1.26
 python-dotenv>=1.0
+bedrock-agentcore>=1.22
