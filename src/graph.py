@@ -153,6 +153,13 @@ _SCORE_TOOL_SCHEMA = {
                     "gap_coverage": {"type": "number", "minimum": 0, "maximum": 1},
                     "role_fit": {"type": "number", "minimum": 0, "maximum": 1},
                     "rationale": {"type": "string"},
+                    "closed_gaps": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "The exact priority-gap labels from the list above that "
+                        "this candidate genuinely closes. Copy the labels verbatim; omit any "
+                        "the candidate only touches superficially. May be empty.",
+                    },
                 },
                 "required": ["candidate_id", "gap_coverage", "role_fit", "rationale"],
             },
@@ -188,6 +195,7 @@ class _Judgment(BaseModel):
     gap_coverage: float = Field(ge=0.0, le=1.0)
     role_fit: float = Field(ge=0.0, le=1.0)
     rationale: str
+    closed_gaps: list[str] = Field(default_factory=list)
 
 
 class _ScoreDecision(BaseModel):
@@ -212,9 +220,10 @@ def _build_score_prompt(
         f"Ranked priority gaps (1 is highest):\n{gap_lines}\n\n"
         f"Candidates to judge:\n{candidate_lines}\n\n"
         "For every candidate above, give gap_coverage (0-1: how much it would actually "
-        "close the priority gaps above, not just what it claims) and role_fit (0-1: how "
-        "well it fits the target role), each with a one-sentence rationale. Call "
-        "score_candidates with exactly one judgment per candidate id listed above."
+        "close the priority gaps above, not just what it claims), role_fit (0-1: how "
+        "well it fits the target role), a one-sentence rationale, and closed_gaps (the "
+        "priority-gap labels it genuinely closes, copied verbatim from the list above). "
+        "Call score_candidates with exactly one judgment per candidate id listed above."
     )
 
 
@@ -253,6 +262,13 @@ def _score_node(state: RunState) -> dict:
     """Real W1.4 score node: one batched Bedrock call for gap_coverage/role_fit, then
     scoring.compose_score (pure) for time_cost, redundancy_penalty and the weighted
     total. Writes `ranked`, fully replacing it - never `candidates`.
+
+    The model also returns `closed_gaps` per candidate - the gap labels it genuinely
+    closes - which is written onto the candidate so redundancy_penalty (set logic in
+    scoring.py against StudentProfile.evidence_labels) has something to work with. The
+    upstream half of that intersection - normalising resume evidence onto the same gap
+    label vocabulary - is W3.2/W3.3 and is a documented simplification until those land:
+    today evidence is empty, so the penalty is 0, but the wiring is live.
     """
     candidates = state.get("candidates", [])[:MAX_CANDIDATES_SCORED]
     profile = state["profile"]
@@ -267,6 +283,8 @@ def _score_node(state: RunState) -> dict:
                 )
             ],
         }
+
+    gap_labels = {gap.label for gap in readiness.gaps}
 
     trace: list[TraceEvent] = []
     try:
@@ -289,15 +307,21 @@ def _score_node(state: RunState) -> dict:
         if judgment is None:
             gap_coverage, role_fit = 0.5, 0.5
             rationale = "Fallback: no model judgment for this candidate."
+            closed_gaps: list[str] = []
         else:
             gap_coverage, role_fit, rationale = (
                 judgment.gap_coverage,
                 judgment.role_fit,
                 judgment.rationale,
             )
-        scores = compose_score(candidate, profile, gap_coverage, role_fit, rationale)
+            # Keep only labels that are real priority gaps - the model occasionally
+            # paraphrases or invents one, and a bad label would silently distort the
+            # redundancy penalty.
+            closed_gaps = [label for label in judgment.closed_gaps if label in gap_labels]
+        scored = candidate.model_copy(update={"closes_gaps": closed_gaps})
+        scores = compose_score(scored, profile, gap_coverage, role_fit, rationale)
         if scores.total >= SCORE_THRESHOLD:
-            ranked.append(candidate.model_copy(update={"scores": scores}))
+            ranked.append(scored.model_copy(update={"scores": scores}))
 
     ranked.sort(key=lambda c: c.scores.total, reverse=True)
     trace.append(
