@@ -212,6 +212,15 @@ Once PR #1 merges, **`state.py` is frozen.** Changing it later breaks three peop
 once. If a change is genuinely needed, open an issue, agree it in the group chat, and Alvin makes
 it in a dedicated PR that everyone rebases onto immediately.
 
+**Amendment, 5 September, agreed in chat before merging:** `RunState` gained one field,
+`ranked: list[Candidate]`, plain last-write-wins (no reducer). `candidates` (`operator.add`)
+cannot be rewritten by the scorer without appending duplicate entries every time score runs,
+including every refine-loop iteration, so it stays a pure append-only log of everything any
+agent ever surfaced. `ranked` is the scored, capped, sorted output the real W1.4 scorer
+produces — fully replaced on every scoring pass — and is what the UI and the act node should
+read for actual recommendations. Nothing else in the contract changed. See the `RunState`
+docstring in `src/state.py` for the full reasoning.
+
 **These two files are the one exception to self-merging.** Since nothing else is gated by a
 reviewer, a silent change to `state.py` or `config.py` can break three workstreams before anyone
 notices. Announce it in the group chat and get a yes from at least one other person before

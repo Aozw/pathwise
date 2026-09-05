@@ -50,6 +50,11 @@ breaking one, stop and say so rather than working around it.
   decision log. Never write trace entries that describe something the code did not actually do.
 - Scoring is split: the model produces gap coverage and role fit only. Time cost, redundancy
   penalty and the weighted sum are computed in Python.
+- `RunState.candidates` is an append-only audit log (`operator.add`) of everything any agent
+  ever surfaced, across every refine-loop iteration — it never shrinks or gets rewritten.
+  Scored, ranked, capped output goes in `RunState.ranked` instead (plain last-write-wins,
+  replaced whole on every scoring pass). Read `ranked` for recommendations, `candidates` for
+  the full history.
 - Eligibility filtering happens before scoring, so no tokens are spent on candidates the student
   cannot take. A semantic shortlist runs immediately after it, ranking the eligible survivors
   against the target gap and keeping the top k, so per-candidate model calls run on tens of options

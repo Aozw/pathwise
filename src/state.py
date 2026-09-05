@@ -237,6 +237,14 @@ class RunState(TypedDict, total=False):
     `candidates` and `trace` use operator.add as their reducer, so concurrent
     sub-agent nodes append rather than overwrite each other. Every other key is
     last-write-wins, so only one node should ever set each of them.
+
+    `candidates` is therefore a growing, append-only log of everything any agent
+    ever surfaced across the whole run, including earlier refine-loop iterations -
+    it does not shrink or get rewritten. The scorer cannot replace entries in it
+    (operator.add would just append duplicates), so scored, ranked, capped output
+    lives separately in `ranked`, which is plain last-write-wins: each scoring pass
+    fully replaces it with the current top-k. `candidates` is the audit trail;
+    `ranked` is what the UI and the act node read.
     """
 
     run_id: str
@@ -250,6 +258,9 @@ class RunState(TypedDict, total=False):
     # fan-out results, appended concurrently
     candidates: Annotated[list[Candidate], operator.add]
     trace: Annotated[list[TraceEvent], operator.add]
+
+    # scored and ranked output of the current scoring pass, replaced each time
+    ranked: list[Candidate]
 
     pending: list[PendingAction]
     approved: list[str]  # PendingAction ids
@@ -269,6 +280,7 @@ def new_run_state(run_id: str) -> RunState:
         skipped=[],
         candidates=[],
         trace=[],
+        ranked=[],
         pending=[],
         approved=[],
         outcomes=[],
