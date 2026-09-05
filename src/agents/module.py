@@ -1,44 +1,62 @@
-"""Module Agent node.
+"""Module Agent node — W2.5.
 
-STUB for W1.2 (graph skeleton): reads the committed NUSMods fixture directly and maps
-it straight onto Candidate, no eligibility filter and no semantic shortlist. The real
-NUSMods fetch/cache (W2.1), prerequisite eligibility filter (W2.2) and the shortlist
-call before returning (W2.5) all replace this.
+Real tool wiring, replacing the W1.2 fixture-reading stub: load_catalogue() (W2.1,
+offline-cached, no network at run time) filtered through is_eligible() (W2.2)
+against the student's completed modules, then capped at a fixed number before
+returning. The module embedding index / semantic shortlist (W2.1b) is cut per
+PLAN.md section 5 - "The Module Agent passes eligible candidates straight to
+scoring with a fixed cap" - so config.MAX_CANDIDATES_SCORED, taken in catalogue
+order, is that cap. Records the found/eligible/capped funnel in the trace: that
+reduction is the token argument PLAN.md wants on the slide.
+
+No timeout/retry/fallback handling here: load_catalogue() is pure file I/O with no
+network path at run time (see src/tools/nusmods.py), so the CLAUDE.md hard rule on
+external calls does not apply to it.
 """
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
+from src.config import MAX_CANDIDATES_SCORED, TIME_COST_HOURS
 from src.state import Candidate, CandidateKind, RunState, SourceName, TraceEvent, TraceKind
+from src.tools.eligibility import is_eligible
+from src.tools.nusmods import CACHE_PATH, NUSModsModule, load_catalogue
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-FIXTURE_PATH = REPO_ROOT / "data" / "fixtures" / "nusmods_module_list.json"
+
+def _to_candidate(module: NUSModsModule, source: SourceName) -> Candidate:
+    return Candidate(
+        id=f"nusmods:{module.code}",
+        kind=CandidateKind.MODULE,
+        source=source,
+        title=f"{module.code} {module.title}",
+        description=module.description,
+        units=module.units,
+        prerequisites_met=True,  # already filtered by is_eligible below
+        time_cost_hours=TIME_COST_HOURS["module"],
+    )
 
 
 def module_node(state: RunState) -> dict:
-    modules = json.loads(FIXTURE_PATH.read_text())
-    candidates = [
-        Candidate(
-            id=f"nusmods:{module['moduleCode']}",
-            kind=CandidateKind.MODULE,
-            source=SourceName.FIXTURE,
-            title=f"{module['moduleCode']} {module['title']}",
-            description=module.get("description", ""),
-            units=float(module["moduleCredit"]) if module.get("moduleCredit") else None,
-        )
-        for module in modules
-    ]
+    profile = state.get("profile")
+    completed_modules = profile.completed_modules if profile else []
+    source = SourceName.NUSMODS if CACHE_PATH.exists() else SourceName.FIXTURE
+
+    catalogue = load_catalogue()
+    eligible = [m for m in catalogue if is_eligible(m, completed_modules)]
+    capped = eligible[:MAX_CANDIDATES_SCORED]
+
+    candidates = [_to_candidate(module, source) for module in capped]
+
     return {
         "candidates": candidates,
         "trace": [
             TraceEvent(
                 kind=TraceKind.OBSERVED,
                 agent="Module Agent",
-                message=f"Found {len(candidates)} modules from fixture data",
-                detail="Stub: reads data/fixtures/nusmods_module_list.json directly, no "
-                "eligibility filter or shortlist yet. Real tool call lands in W2.1-W2.5.",
+                message=f"Found {len(catalogue)} modules, {len(eligible)} eligible, "
+                f"capped to {len(capped)} for scoring",
+                detail="Eligibility filter is src.tools.eligibility.is_eligible (W2.2). "
+                "No semantic shortlist (W2.1b is cut per PLAN.md) - the fixed cap is "
+                "config.MAX_CANDIDATES_SCORED, taken in catalogue order.",
             )
         ],
     }
