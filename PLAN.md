@@ -241,17 +241,20 @@ Nobody edits outside their row without an issue and the owner's agreement.
 |---|---|---|
 | Alvin | W1 — state, graph, orchestrator | `src/state.py`, `src/config.py`, `src/graph.py`, `src/agents/planner.py`, `src/scoring.py` |
 | Alvin | W2 — data sources (reassigned) | `src/tools/*`, `data/index/*`, `src/agents/module.py`, `src/agents/event.py`, `src/agents/project.py` |
-| Stevson | W3 — profile ingestion and evaluation | `src/agents/profile.py`, `tests/*`, `data/fixtures/*` |
+| Stevson, Aaron | W3 — profile ingestion and evaluation | `src/agents/profile.py`, `tests/*`, `data/fixtures/*` |
 | Aaron | W4 — frontend, entrypoint, deploy | `web/*`, `infra/*`, `src/entrypoint.py`, `.github/workflows/*` |
 
 Samuel is off code for the rest of the build and owns the written deliverables instead. Alvin
-absorbs all of W2 on top of W1.
+absorbs all of W2 on top of W1. **W3 is now shared by Stevson and Aaron** (agreed in the group
+chat) so it does not stall while Stevson has limited Claude Code capacity.
 
 **What this changes in practice.** Alvin now owns most of `src/`, so the do-not-touch rule matters
 less for him and more for everyone else: Stevson and Aaron must still stay in their own areas.
 W1 and W2 are no longer parallel, they are sequential through one person, so the ordering in
 section 5 is now a queue rather than two independent tracks. Assume less gets built, and cut from
-the bottom of the W2 list rather than starting everything and finishing nothing.
+the bottom of the W2 list rather than starting everything and finishing nothing. W3 has two
+owners now: claim a W3 task in the group chat before starting it so the two of you do not both
+pick up the same one.
 
 ---
 
@@ -329,7 +332,11 @@ Runs in parallel with everything and needs no repo access beyond reading it.
   Stevson's W3.5 produces them.
 - **W5.4** Video script and shot list, so Sunday night's recording is one take rather than five.
 
-### W3 — Stevson: profile ingestion and evaluation
+### W3 — Stevson & Aaron: profile ingestion and evaluation
+
+**Shared workstream.** Stevson has limited Claude Code capacity this week, so Aaron picks up W3
+tasks alongside W4. Agreed in the group chat. Claim a task in the chat before starting it so the
+two owners do not collide.
 
 - **W3.1** Transcript parser. Bedrock call with a Pydantic schema producing `StudentProfile`.
   Works entirely against fixtures, so it needs nothing from anyone else. Start here.
