@@ -58,8 +58,8 @@ def _state(profile: StudentProfile) -> dict:
     return {"candidates": [_candidate()], "profile": profile, "readiness": _readiness()}
 
 
-def _decision(closed_gaps: list[str]) -> graph._ScoreDecision:
-    return graph._ScoreDecision(
+def _decision(closed_gaps: list[str]) -> tuple[graph._ScoreDecision, graph.ModelCallStats]:
+    decision = graph._ScoreDecision(
         judgments=[
             graph._Judgment(
                 candidate_id="nusmods:CS3210",
@@ -70,6 +70,7 @@ def _decision(closed_gaps: list[str]) -> graph._ScoreDecision:
             )
         ]
     )
+    return decision, graph.ModelCallStats(input_tokens=120, output_tokens=40, schema_validations_passed=1)
 
 
 def test_closed_gaps_from_the_model_land_on_the_candidate():
@@ -92,6 +93,20 @@ def test_a_gap_label_the_model_invents_is_discarded():
         result = graph._score_node(_state(_profile()))
 
     assert result["ranked"][0].closes_gaps == [_GAP]
+
+
+def test_score_node_accumulates_model_call_metrics():
+    from src.state import RunMetrics
+
+    state = _state(_profile())
+    state["metrics"] = RunMetrics(input_tokens=10, output_tokens=5)
+    with patch.object(graph, "_call_score_bedrock", return_value=_decision([_GAP])):
+        result = graph._score_node(state)
+
+    m = result["metrics"]
+    assert m.input_tokens == 130  # 10 carried + 120 this call
+    assert m.output_tokens == 45
+    assert m.schema_validations_passed == 1
 
 
 def test_fallback_judgment_does_not_invent_closed_gaps():
