@@ -27,7 +27,9 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import boto3
@@ -46,11 +48,17 @@ from src.config import (
 from src.state import (
     CompletedModule,
     Dimension,
+    DimensionScore,
     Evidence,
+    Gap,
+    Readiness,
+    RunState,
     StudentProfile,
     TraceEvent,
     TraceKind,
 )
+
+FIXTURE_DIR = Path(__file__).resolve().parents[2] / "data" / "fixtures"
 
 _TOOL_NAME = "record_profile"
 
@@ -553,15 +561,303 @@ def build_profile(
     )
 
 
+# ---------------------------------------------------------------------------
+# W3.3 - readiness assessment. The model scores each of the five dimensions; the
+# targets, the gap ranking and the weighted shortfall are computed in Python, the
+# same split the scorer uses (see CLAUDE.md: model produces the judgement, Python
+# does the arithmetic, so the ranking is reproducible and auditable).
+# ---------------------------------------------------------------------------
+
+# Per-dimension target = a floor plus the target role's weight for that dimension,
+# scaled. Role weights sum to 1.0 over five dimensions (~0.05-0.40 each), so targets
+# land roughly in 0.5-0.95. Role-driven and deterministic, never a model guess.
+_TARGET_FLOOR = 0.45
+_TARGET_WEIGHT_SCALE = 1.4
+# A dimension is a gap only if it falls short by more than this - avoids flagging a
+# dimension the student is within rounding distance of.
+_GAP_EPSILON = 0.02
+
+_GAP_LABELS = {
+    Dimension.PROGRAMMING: "Programming fluency across languages and paradigms",
+    Dimension.SYSTEMS: "Systems depth - OS, networking, concurrency, distributed systems",
+    Dimension.DATA: "Data and databases - modelling, SQL, pipelines",
+    Dimension.TOOLING: "Engineering tooling - version control, containers, CI, testing",
+    Dimension.COMMUNICATION: "Communication - writing, presenting, leading",
+}
+
+# Module-title keywords -> the dimension that module builds. Coarse on purpose: a
+# defensible signal for the deterministic path, not a full curriculum map.
+_MODULE_KEYWORDS: list[tuple[str, Dimension]] = [
+    ("operating system", Dimension.SYSTEMS),
+    ("computer organisation", Dimension.SYSTEMS),
+    ("computer network", Dimension.SYSTEMS),
+    ("parallel", Dimension.SYSTEMS),
+    ("distributed", Dimension.SYSTEMS),
+    ("concurren", Dimension.SYSTEMS),
+    ("data structures", Dimension.PROGRAMMING),
+    ("algorithm", Dimension.PROGRAMMING),
+    ("programming methodology", Dimension.PROGRAMMING),
+    ("programming language", Dimension.PROGRAMMING),
+    ("software engineering", Dimension.TOOLING),
+    ("software development", Dimension.TOOLING),
+    ("database", Dimension.DATA),
+    ("probability", Dimension.DATA),
+    ("statistics", Dimension.DATA),
+    ("machine learning", Dimension.DATA),
+    ("artificial intelligence", Dimension.DATA),
+    ("data science", Dimension.DATA),
+    ("communication", Dimension.COMMUNICATION),
+    ("writing", Dimension.COMMUNICATION),
+    ("presentation", Dimension.COMMUNICATION),
+]
+
+_READINESS_TOOL_NAME = "record_readiness"
+
+_READINESS_TOOL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "dimensions": {
+            "type": "array",
+            "description": "Exactly one entry per readiness dimension.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "dimension": {"type": "string", "enum": _DIMENSION_VALUES},
+                    "score": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1,
+                        "description": "Current readiness 0-1 from completed modules and "
+                        "demonstrated evidence, not potential.",
+                    },
+                    "rationale": {"type": "string", "description": "One sentence."},
+                    "gap_label": {
+                        "type": "string",
+                        "description": "If below the role's bar, a specific phrase for what "
+                        "is missing (e.g. 'distributed systems and consensus'). Else empty.",
+                    },
+                },
+                "required": ["dimension", "score", "rationale"],
+            },
+        }
+    },
+    "required": ["dimensions"],
+}
+
+
+class _DimensionAssessment(BaseModel):
+    dimension: Dimension
+    score: float = Field(ge=0.0, le=1.0)
+    rationale: str
+    gap_label: str = ""
+
+
+class _ReadinessExtracted(BaseModel):
+    dimensions: list[_DimensionAssessment] = Field(default_factory=list)
+
+
+def _module_dimension(title: str) -> Dimension | None:
+    lowered = title.lower()
+    for keyword, dimension in _MODULE_KEYWORDS:
+        if keyword in lowered:
+            return dimension
+    return None
+
+
+def _profile_summary(profile: StudentProfile) -> str:
+    modules = ", ".join(f"{m.code} {m.title}" for m in profile.completed_modules) or "none"
+    evidence = (
+        "; ".join(f"{item.label} ({item.dimension.value})" for item in profile.evidence)
+        or "none"
+    )
+    return (
+        f"Year {profile.year} {profile.major}, targeting {profile.target_role}.\n"
+        f"Completed modules: {modules}\n"
+        f"Demonstrated evidence: {evidence}"
+    )
+
+
+def _call_readiness_bedrock(profile: StudentProfile) -> _ReadinessExtracted:
+    prompt = (
+        "Assess this student's current readiness on each of the five dimensions "
+        "(programming, systems, data, tooling, communication) from what they have "
+        "actually completed and demonstrated. Score 0-1, one sentence of rationale, "
+        "and a specific gap_label where they fall short of what the target role needs. "
+        f"Call the {_READINESS_TOOL_NAME} tool.\n\n{_profile_summary(profile)}"
+    )
+    last_error: Exception | None = None
+    for _ in range(1 + TOOL_RETRIES):
+        try:
+            response = _bedrock().converse(
+                modelId=MODEL_HAIKU,
+                messages=[{"role": "user", "content": [{"text": prompt}]}],
+                toolConfig={
+                    "tools": [
+                        {
+                            "toolSpec": {
+                                "name": _READINESS_TOOL_NAME,
+                                "description": "Record the per-dimension readiness assessment.",
+                                "inputSchema": {"json": _READINESS_TOOL_SCHEMA},
+                            }
+                        }
+                    ],
+                    "toolChoice": {"tool": {"name": _READINESS_TOOL_NAME}},
+                },
+                inferenceConfig={"temperature": 0, "maxTokens": 1500},
+            )
+            for block in response["output"]["message"]["content"]:
+                if "toolUse" in block:
+                    extracted = _ReadinessExtracted.model_validate(block["toolUse"]["input"])
+                    if {a.dimension for a in extracted.dimensions} != set(Dimension):
+                        raise ValueError("readiness assessment did not cover all five dimensions")
+                    return extracted
+            raise ValueError("model did not call the record_readiness tool")
+        except (ClientError, BotoCoreError, ValidationError, ValueError, KeyError) as exc:
+            last_error = exc
+    raise RuntimeError(f"readiness Bedrock call failed after retry: {last_error}") from last_error
+
+
+def _deterministic_readiness(profile: StudentProfile) -> _ReadinessExtracted:
+    """Score each dimension from a year baseline plus capped contributions from
+    matching evidence and completed modules. Coarse, but reproducible and explainable.
+    """
+    year_baseline = min(0.45, 0.12 * profile.year)
+    evidence_by_dimension = Counter(item.dimension for item in profile.evidence)
+    modules_by_dimension: Counter[Dimension] = Counter()
+    for module in profile.completed_modules:
+        dimension = _module_dimension(module.title)
+        if dimension is not None:
+            modules_by_dimension[dimension] += 1
+
+    assessments: list[_DimensionAssessment] = []
+    for dimension in Dimension:
+        evidence_boost = min(0.4, 0.15 * evidence_by_dimension[dimension])
+        module_boost = min(0.4, 0.1 * modules_by_dimension[dimension])
+        score = round(min(1.0, year_baseline + evidence_boost + module_boost), 2)
+        assessments.append(
+            _DimensionAssessment(
+                dimension=dimension,
+                score=score,
+                rationale=(
+                    f"{evidence_by_dimension[dimension]} evidence item(s), "
+                    f"{modules_by_dimension[dimension]} related module(s), "
+                    f"year {profile.year} baseline"
+                ),
+            )
+        )
+    return _ReadinessExtracted(dimensions=assessments)
+
+
+def _to_readiness(extracted: _ReadinessExtracted, profile: StudentProfile) -> Readiness:
+    weights = ROLE_DIMENSION_WEIGHTS[profile.target_role]
+    dimension_scores: list[DimensionScore] = []
+    shortfalls: list[tuple[_DimensionAssessment, float, float]] = []  # (assessment, target, weight)
+
+    for assessment in extracted.dimensions:
+        weight = weights[assessment.dimension.value]
+        target = round(min(1.0, _TARGET_FLOOR + weight * _TARGET_WEIGHT_SCALE), 2)
+        dimension_scores.append(
+            DimensionScore(
+                dimension=assessment.dimension,
+                score=assessment.score,
+                rationale=assessment.rationale,
+            )
+        )
+        if assessment.score < target - _GAP_EPSILON:
+            shortfalls.append((assessment, target, weight))
+
+    # Priority = weighted shortfall: how far below the bar, scaled by how much the
+    # role cares about that dimension. Biggest weighted gap is priority 1.
+    shortfalls.sort(key=lambda item: (item[1] - item[0].score) * item[2], reverse=True)
+    gaps = [
+        Gap(
+            dimension=assessment.dimension,
+            label=assessment.gap_label.strip() or _GAP_LABELS[assessment.dimension],
+            priority=index + 1,
+            current=assessment.score,
+            target=target,
+        )
+        for index, (assessment, target, _weight) in enumerate(shortfalls)
+    ]
+    return Readiness(dimensions=dimension_scores, gaps=gaps)
+
+
+@dataclass
+class ReadinessAssessment:
+    readiness: Readiness
+    trace: list[TraceEvent]
+    used_fallback: bool
+
+
+def assess_readiness(profile: StudentProfile) -> ReadinessAssessment:
+    """Assess readiness across the five dimensions and rank the priority gaps."""
+    if profile.target_role not in ROLE_DIMENSION_WEIGHTS:
+        raise ValueError(
+            f"target_role {profile.target_role!r} is not a key in config.ROLE_DIMENSION_WEIGHTS"
+        )
+
+    used_fallback = False
+    fallback_reason: str | None = None
+    try:
+        extracted = _call_readiness_bedrock(profile)
+    except RuntimeError as exc:
+        extracted = _deterministic_readiness(profile)
+        used_fallback = True
+        fallback_reason = str(exc)
+
+    readiness = _to_readiness(extracted, profile)
+
+    trace: list[TraceEvent] = []
+    if used_fallback:
+        trace.append(
+            TraceEvent(
+                kind=TraceKind.OBSERVED,
+                agent="Profile Agent",
+                message="Readiness assessed by the deterministic fallback",
+                detail=fallback_reason,
+            )
+        )
+    top_gap = readiness.gaps[0].label if readiness.gaps else "none"
+    trace.append(
+        TraceEvent(
+            kind=TraceKind.OBSERVED,
+            agent="Profile Agent",
+            message=f"Assessed readiness: {len(readiness.gaps)} priority gap(s), "
+            f"top gap '{top_gap}'",
+        )
+    )
+    return ReadinessAssessment(readiness=readiness, trace=trace, used_fallback=used_fallback)
+
+
+def profile_node(state: RunState) -> dict:
+    """Graph entry node (W3.1-W3.3), the real replacement for graph._profile_stub.
+
+    Reads the committed fixture transcript and resume, builds the StudentProfile and
+    assesses readiness, and returns both plus the combined trace. Accepting a
+    student's own uploaded transcript needs a new RunState field - a frozen-contract
+    change - so that stays with whoever wires the upload path (W4).
+    """
+    built = build_profile(
+        (FIXTURE_DIR / "transcript.txt").read_text(),
+        (FIXTURE_DIR / "resume.txt").read_text(),
+        DEFAULT_ROLE,
+    )
+    assessment = assess_readiness(built.profile)
+    return {
+        "profile": built.profile,
+        "readiness": assessment.readiness,
+        "trace": built.trace + assessment.trace,
+    }
+
+
 if __name__ == "__main__":
     # Manual check against the fixtures. Not a pytest test — CLAUDE.md bars those from
     # touching Bedrock. Run with credentials to exercise the model path:
     #   python -m src.agents.profile
-    from pathlib import Path
-
-    fixtures = Path(__file__).parents[2] / "data" / "fixtures"
     built = build_profile(
-        (fixtures / "transcript.txt").read_text(), (fixtures / "resume.txt").read_text()
+        (FIXTURE_DIR / "transcript.txt").read_text(), (FIXTURE_DIR / "resume.txt").read_text()
     )
-    print(f"used_fallback={built.used_fallback}")
+    assessment = assess_readiness(built.profile)
+    print(f"transcript/resume fallback={built.used_fallback}, readiness fallback={assessment.used_fallback}")
     print(json.dumps(built.profile.model_dump(mode="json"), indent=2))
+    print(json.dumps(assessment.readiness.model_dump(mode="json"), indent=2))
