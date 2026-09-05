@@ -1,0 +1,34 @@
+TAN WEI LING
+Singapore | weiling.tan@u.nus.edu | github.com/weilingtan
+
+EDUCATION
+National University of Singapore
+BComp (Hons) Computer Science, Year 2. Expected 2028.
+
+EXPERIENCE
+Teaching Assistant, CS2040S Data Structures and Algorithms
+Aug 2025 - Dec 2025
+Ran weekly lab sessions for 20 students. Graded assignments and wrote
+feedback on algorithmic complexity.
+
+Software Engineering Intern, Kopi Analytics (startup, 12 people)
+May 2025 - Aug 2025
+Built a REST API in Flask for the internal reporting dashboard.
+Wrote the PostgreSQL queries behind six reporting endpoints.
+Added pytest coverage to a service that previously had none.
+
+PROJECTS
+NUSFoodFinder - web app, CS2103T team project
+React frontend, Spring Boot backend, MySQL. Led the API design for the team of 5.
+
+Orbital 2025 (Apollo level) - habit tracking mobile app
+Flutter and Firebase. Shipped to 200 users during the summer.
+
+SKILLS
+Languages: Java, Python, JavaScript, SQL
+Frameworks: Flask, Spring Boot, React, Flutter
+Tools: Git, Docker (basic), pytest, Postman
+
+ACTIVITIES
+NUS Hackers, member
+Residential college volunteer, Ridge View

@@ -1,0 +1,37 @@
+NATIONAL UNIVERSITY OF SINGAPORE
+Unofficial Transcript of Academic Record
+
+Student: TAN WEI LING
+Programme: Bachelor of Computing (Honours) in Computer Science
+Candidature: AY2024/2025 - AY2027/2028
+Units completed: 72 of 160
+
+AY2024/2025 SEMESTER 1
+CS1101S   Programming Methodology                    4   A-
+CS1231S   Discrete Structures                        4   B+
+MA1521    Calculus for Computing                     4   B
+GEA1000   Quantitative Reasoning with Data           4   A
+
+AY2024/2025 SEMESTER 2
+CS2030S   Programming Methodology II                 4   A-
+CS2040S   Data Structures and Algorithms             4   B+
+MA1522    Linear Algebra for Computing               4   B-
+GESS1025  Public Health in Singapore                 4   A-
+
+AY2025/2026 SEMESTER 1
+CS2100    Computer Organisation                      4   B+
+CS2103T   Software Engineering                       4   A-
+CS2101    Effective Communication for Computing      4   B+
+ST2334    Probability and Statistics                 4   B
+
+AY2025/2026 SEMESTER 2
+CS2106    Introduction to Operating Systems          4   B+
+CS2105    Introduction to Computer Networks          4   B
+CS2109S   Introduction to AI and Machine Learning    4   B-
+IS1108    Digital Ethics and Data Privacy            4   A-
+
+SPECIAL TERM AY2025/2026
+CS2107    Introductory Information Security          4   B+
+CFG1002    Career Catalyst                           4   S
+
+Total modules completed: 18

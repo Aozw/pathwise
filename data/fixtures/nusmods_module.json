@@ -1,0 +1,19 @@
+{
+  "moduleCode": "CS3210",
+  "title": "Parallel Computing",
+  "description": "The aim of this module is to provide an introduction to the field of parallel computing with hands-on parallel programming experience on real parallel machines. The module covers parallel architectures, shared-memory and message-passing programming models, performance analysis, and the design of parallel algorithms.",
+  "moduleCredit": "4",
+  "department": "Computer Science",
+  "faculty": "Computing",
+  "prerequisite": "CS2100 or CS2106",
+  "prereqTree": {
+    "or": ["CS2100", "CS2106"]
+  },
+  "semesterData": [
+    {
+      "semester": 1,
+      "examDate": "2026-11-24T09:00:00.000Z",
+      "examDuration": 120
+    }
+  ]
+}

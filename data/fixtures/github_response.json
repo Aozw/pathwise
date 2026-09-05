@@ -1,0 +1,35 @@
+{
+  "total_count": 3,
+  "items": [
+    {
+      "id": 1001,
+      "full_name": "example-org/raft-teaching-impl",
+      "html_url": "https://github.com/example-org/raft-teaching-impl",
+      "description": "A readable Raft consensus implementation in Go, written for teaching. Good first issues labelled for newcomers to distributed systems.",
+      "stargazers_count": 1840,
+      "language": "Go",
+      "open_issues_count": 23,
+      "topics": ["distributed-systems", "consensus", "raft", "good-first-issue"]
+    },
+    {
+      "id": 1002,
+      "full_name": "example-org/tiny-kv-store",
+      "html_url": "https://github.com/example-org/tiny-kv-store",
+      "description": "Minimal log-structured key-value store with a write-ahead log and compaction. Under 3000 lines, designed to be read end to end.",
+      "stargazers_count": 620,
+      "language": "Rust",
+      "open_issues_count": 11,
+      "topics": ["storage-engine", "database", "lsm-tree"]
+    },
+    {
+      "id": 1003,
+      "full_name": "example-org/loadgen",
+      "html_url": "https://github.com/example-org/loadgen",
+      "description": "HTTP load generator with latency histograms. Beginner-friendly issues around adding new output formats.",
+      "stargazers_count": 310,
+      "language": "Python",
+      "open_issues_count": 8,
+      "topics": ["benchmarking", "http", "performance"]
+    }
+  ]
+}
