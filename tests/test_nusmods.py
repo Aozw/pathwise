@@ -85,6 +85,26 @@ def test_load_catalogue_handles_missing_module_credit(tmp_path):
     assert module.units is None
 
 
+def test_load_catalogue_parses_prerequisite_text(tmp_path):
+    fixture_path = tmp_path / "fixture.json"
+    fixture_path.write_text(
+        json.dumps(
+            [
+                _raw_module(moduleCode="CS3210", prerequisite="must have completed CS2100"),
+                _raw_module(moduleCode="CS1010", prerequisite=""),
+            ]
+        )
+    )
+
+    with patch.object(nusmods, "CACHE_PATH", tmp_path / "no-cache.json"), patch.object(
+        nusmods, "FIXTURE_PATH", fixture_path
+    ):
+        gated, ungated = nusmods.load_catalogue()
+
+    assert gated.prerequisite_text == "must have completed CS2100"
+    assert ungated.prerequisite_text is None  # empty string normalised to None
+
+
 def test_fetch_module_catalogue_returns_parsed_json_on_success():
     response = MagicMock()
     response.json.return_value = [_raw_module()]
@@ -106,6 +126,43 @@ def test_fetch_module_catalogue_retries_once_then_raises():
             nusmods.fetch_module_catalogue()
 
     assert mock_get.call_count == 1 + nusmods.TOOL_RETRIES
+
+
+def test_fetch_module_detail_returns_parsed_module_with_real_tree():
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = _raw_module(
+        moduleCode="CS3210",
+        prereqTree={"or": ["CS2100:D", "CS2106:D"]},
+        prerequisite="must have completed 1 of CS2100/CS2106 at grade D",
+    )
+
+    with patch.object(nusmods.requests, "get", return_value=response) as mock_get:
+        module = nusmods.fetch_module_detail("CS3210")
+
+    assert module.code == "CS3210"
+    assert module.prereq_tree == {"or": ["CS2100:D", "CS2106:D"]}
+    assert "modules/CS3210.json" in mock_get.call_args.args[0]
+
+
+def test_fetch_module_detail_returns_none_after_retry_on_failure():
+    with patch.object(
+        nusmods.requests, "get", side_effect=requests.ConnectionError("down")
+    ) as mock_get:
+        result = nusmods.fetch_module_detail("CS3210")
+
+    assert result is None
+    assert mock_get.call_count == 1 + nusmods.TOOL_RETRIES
+
+
+def test_fetch_module_detail_returns_none_on_404():
+    response = MagicMock()
+    response.raise_for_status.side_effect = requests.HTTPError("404")
+
+    with patch.object(nusmods.requests, "get", return_value=response):
+        result = nusmods.fetch_module_detail("NOTAREALCODE9999")
+
+    assert result is None
 
 
 def test_refresh_cache_writes_fetched_payload_to_cache_path(tmp_path):

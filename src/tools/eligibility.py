@@ -6,10 +6,17 @@ PR for the raw trees): a node is one of
 
   - a leaf string, a module code optionally suffixed "CODE:GRADE"
     (e.g. "CS2100:D" - completed CS2100 at grade D or better; a bare "CS2106" means
-    just completed, no grade floor)
+    just completed, no grade floor), and optionally ending in "%" - a wildcard over a
+    module family (e.g. "ACC1701%:D", satisfied by completing any of
+    ACC1701A/B/C/D/XA/XB/XC/XD at grade D or better - live-observed fetching real
+    modules at W2.5 integration time, not in the original spread of examples)
   - {"and": [node, ...]}         every child must be satisfied
   - {"or": [node, ...]}          at least one child must be satisfied
   - {"nOf": [n, [node, ...]]}    at least n of the children must be satisfied
+  - anything else (e.g. {"cohort": {...}}, an admission-year restriction rather than a
+    completed-module requirement - also live-observed at W2.5 integration time) is
+    treated as satisfied: there's no reason to assume this grammar list is complete,
+    and no StudentProfile field to evaluate a rule outside it against anyway
 
 This is a pure function, no I/O, per the CLAUDE.md hard rule and PLAN.md's own framing
 of this task ("one of only two places that can produce a real accuracy number for the
@@ -64,7 +71,19 @@ def _meets_min_grade(actual_grade: str | None, min_grade: str) -> bool:
 
 
 def _leaf_satisfied(leaf: str, completed_by_code: dict[str, str | None]) -> bool:
+    """A leaf code ending "%" is a wildcard over a module family (live-observed:
+    "ACC1701%:D" is satisfied by completing any of ACC1701A/B/C/D/XA/XB/XC/XD) -
+    satisfied if any completed code sharing that prefix meets the grade floor.
+    """
     code, _, min_grade = leaf.partition(":")
+    if code.endswith("%"):
+        prefix = code[:-1]
+        matching_codes = [c for c in completed_by_code if c.startswith(prefix)]
+        if not matching_codes:
+            return False
+        if not min_grade:
+            return True
+        return any(_meets_min_grade(completed_by_code[c], min_grade) for c in matching_codes)
     if code not in completed_by_code:
         return False
     if not min_grade:
@@ -73,6 +92,15 @@ def _leaf_satisfied(leaf: str, completed_by_code: dict[str, str | None]) -> bool
 
 
 def _node_satisfied(node: Any, completed_by_code: dict[str, str | None]) -> bool:
+    """Live-fetching real module detail turned up prereqTree node shapes beyond
+    and/or/nOf - e.g. {"cohort": {"rule": "MUST_BE_IN", "years": ["S:2017"]}}, an
+    admission-year restriction, not a completed-module requirement. There is no
+    reason to assume and/or/nOf is the complete grammar, and StudentProfile has no
+    field to evaluate a rule like that anyway. Treated the same as a missing tree:
+    satisfied, not an error - one module's unusual rule crashing the whole run (this
+    used to raise ValueError here) is a worse failure mode than one false-positive
+    eligibility answer.
+    """
     if node is None:
         return True
     if isinstance(node, str):
@@ -86,7 +114,7 @@ def _node_satisfied(node: Any, completed_by_code: dict[str, str | None]) -> bool
             n, children = node["nOf"]
             met = sum(1 for child in children if _node_satisfied(child, completed_by_code))
             return met >= n
-    raise ValueError(f"unrecognised prereqTree node: {node!r}")
+    return True
 
 
 def is_eligible(module: Any, completed_modules: list[CompletedModule]) -> bool:

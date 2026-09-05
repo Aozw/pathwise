@@ -79,6 +79,34 @@ def test_nested_and_or_combination():
     assert is_eligible(module, []) is False
 
 
+def test_wildcard_leaf_satisfied_by_any_matching_family_member():
+    # Live-observed real tree: ACC2727 requires ACC1701% (any of ACC1701A/B/C/D/
+    # XA/XB/XC/XD) or EC2204, at grade D.
+    module = _module({"or": ["ACC1701%:D", "EC2204:D"]})
+    assert is_eligible(module, _completed(("ACC1701C", "B"))) is True
+    assert is_eligible(module, _completed(("EC2204", "B"))) is True
+    assert is_eligible(module, _completed(("ACC1702", "B"))) is False  # not a match
+    assert is_eligible(module, []) is False
+
+
+def test_wildcard_leaf_checks_grade_floor_across_matches():
+    module = _module("ACC1701%:D")
+    assert is_eligible(module, _completed(("ACC1701A", "F"), ("ACC1701B", "B"))) is True
+    assert is_eligible(module, _completed(("ACC1701A", "F"))) is False
+
+
+def test_unrecognised_node_shape_defaults_to_satisfied_not_an_error():
+    # Live-observed: a cohort/admission-year restriction, not a completed-module
+    # requirement - StudentProfile has no field to evaluate it against.
+    module = _module({"cohort": {"rule": "MUST_BE_IN", "years": ["S:2017"]}})
+    assert is_eligible(module, []) is True
+
+
+def test_unrecognised_node_nested_inside_and_defaults_to_satisfied():
+    module = _module({"and": ["CS2106", {"cohort": {"rule": "MUST_BE_IN", "years": ["S:2017"]}}]})
+    assert is_eligible(module, _completed(("CS2106", "B"))) is True
+
+
 def test_deeply_nested_real_tree_cs4243():
     # Copied verbatim from a live GET of modules/CS4243.json.
     tree = {

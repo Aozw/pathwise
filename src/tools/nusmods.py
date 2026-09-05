@@ -21,16 +21,18 @@ load_catalogue() returns NUSModsModule, not the raw dict: only the fields W2.2
 data, workload arrays and add-on programme info are dropped here so they never reach
 the model's context window later.
 
-W2.2 needs to know one thing this file discovered against the live endpoint: neither
-NUSMods bulk file (moduleInformation.json here, or the larger moduleInfo.json) carries
-a structured prereqTree for any module - live-checked, 0/7138 and 0/20560 respectively.
-Only `prerequisite`, a free-text sentence, is present in bulk. The structured tree
-NUSModsModule.prereq_tree exposes only exists on the per-module detail endpoint
-(`{base}/{year}/modules/{code}.json`, the shape data/fixtures/nusmods_module.json
-mirrors), fetched one module at a time. So `load_catalogue()` leaves `prereq_tree`
-as None for everything except entries read from the fixture fallback. W2.2 will need
-its own lazy, per-candidate detail fetch (small, bounded by the eligible/shortlisted
-set, not the full catalogue) rather than assuming this file's bulk cache carries it.
+This file discovered, live, that neither NUSMods bulk file (moduleInformation.json
+here, or the larger moduleInfo.json) carries a structured prereqTree for any module -
+checked, 0/7138 and 0/20560 respectively. Only `prerequisite`, a free-text sentence,
+is present in bulk - exposed here as NUSModsModule.prerequisite_text, and used as a
+zero-network signal for which modules are even worth a live detail check: empty/absent
+means genuinely no prerequisite, present means module_node (W2.5) should call
+fetch_module_detail() for the real tree. The structured tree NUSModsModule.prereq_tree
+only exists on the per-module detail endpoint (`{base}/{year}/modules/{code}.json`,
+the shape data/fixtures/nusmods_module.json mirrors) - so `load_catalogue()` leaves
+`prereq_tree` as None for everything except entries read from the fixture fallback,
+by design; fetch_module_detail() is the lazy, per-candidate, budget-bounded way to
+get a real one, not something this bulk load ever does itself.
 """
 
 from __future__ import annotations
@@ -56,9 +58,9 @@ class NUSModsModule(BaseModel):
     NUSMods' prerequisite trees are irregular ({"and": [...]}, {"or": [...]}, nested
     combinations, or a bare module code), and W2.2 owns turning that into
     `is_eligible()`. Parsing it twice would be wasted work and a chance to disagree
-    with itself. In practice this is always None from load_catalogue()'s live path -
-    see the module docstring; only the fixture fallback and a future per-module
-    detail fetch populate it.
+    with itself. In practice this is only ever populated by the fixture fallback or
+    by fetch_module_detail() - see the module docstring for why load_catalogue()'s
+    live path can't populate it directly.
     """
 
     code: str
@@ -67,6 +69,7 @@ class NUSModsModule(BaseModel):
     units: float | None = None
     department: str = ""
     prereq_tree: Any | None = None
+    prerequisite_text: str | None = None
 
 
 def _parse(raw_modules: list[dict]) -> list[NUSModsModule]:
@@ -81,6 +84,7 @@ def _parse(raw_modules: list[dict]) -> list[NUSModsModule]:
                 units=float(credit) if credit not in (None, "") else None,
                 department=module.get("department", ""),
                 prereq_tree=module.get("prereqTree"),
+                prerequisite_text=module.get("prerequisite") or None,
             )
         )
     return parsed
@@ -112,6 +116,29 @@ def refresh_cache(academic_year: str = NUSMODS_ACADEMIC_YEAR) -> Path:
     CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
     CACHE_PATH.write_text(json.dumps(raw_modules))
     return CACHE_PATH
+
+
+def fetch_module_detail(
+    code: str, academic_year: str = NUSMODS_ACADEMIC_YEAR
+) -> NUSModsModule | None:
+    """Live GET of one module's detail endpoint - the only NUSMods response shape that
+    actually carries a structured prereqTree (see the module docstring). Timeout + one
+    retry, same as every other tool call, but returns None on failure rather than
+    raising: this is meant to be called per-candidate inside a bounded loop (W2.5's
+    module_node), where one module's failure should degrade that one candidate
+    gracefully - is_eligible() already treats a None prereq_tree as eligible, the same
+    fallback as a module with no prerequisite at all - not abort the whole batch.
+    """
+    url = f"{NUSMODS_BASE_URL}/{academic_year}/modules/{code}.json"
+    for _ in range(1 + TOOL_RETRIES):
+        try:
+            response = requests.get(url, timeout=TOOL_TIMEOUT_SECONDS)
+            response.raise_for_status()
+            [parsed] = _parse([response.json()])
+            return parsed
+        except (requests.RequestException, ValueError, KeyError):
+            continue
+    return None
 
 
 def load_catalogue() -> list[NUSModsModule]:
