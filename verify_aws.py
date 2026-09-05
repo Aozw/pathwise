@@ -67,11 +67,25 @@ def list_models() -> list[str]:
     print("\n3. Claude models callable in this region")
     bedrock = boto3.client("bedrock", region_name=REGION)
 
-    ids: list[str] = []
+    # Bare foundation-model ids and inference-profile ids are not interchangeable: a
+    # newer model's bare id often has inferenceTypesSupported == ["INFERENCE_PROFILE"],
+    # meaning converse() rejects it and only the region-prefixed profile id works. Keep
+    # the two apart so the id actually picked below is one that can be called.
+    bare_ids: list[str] = []
+    legacy_bare_ids: set[str] = set()
     try:
         for model in bedrock.list_foundation_models()["modelSummaries"]:
-            if "claude" in model["modelId"].lower():
-                ids.append(model["modelId"])
+            if "claude" not in model["modelId"].lower():
+                continue
+            # Skip legacy models entirely rather than surface an id that Bedrock will
+            # reject with "marked by provider as Legacy... access denied". Remembered
+            # separately so inference profiles routing to a legacy model (below) can
+            # be filtered too - a profile's own `status` is always "ACTIVE" regardless
+            # of the underlying model's lifecycle.
+            if model.get("modelLifecycle", {}).get("status") == "LEGACY":
+                legacy_bare_ids.add(model["modelId"])
+                continue
+            bare_ids.append(model["modelId"])
     except (ClientError, BotoCoreError) as exc:
         fail(
             str(exc),
@@ -79,26 +93,38 @@ def list_models() -> list[str]:
             f"  {REGION}; the organisers' guide says Bedrock is granted in us-east-1.",
         )
 
-    # Inference profiles are what you actually pass as modelId for the newer
-    # models. If this call is not permitted, the bare ids above still work.
+    profile_ids: list[str] = []
     try:
         for profile in bedrock.list_inference_profiles()["inferenceProfileSummaries"]:
-            if "claude" in profile["inferenceProfileId"].lower():
-                ids.append(profile["inferenceProfileId"])
+            if "claude" not in profile["inferenceProfileId"].lower():
+                continue
+            underlying = profile.get("models", [{}])[0].get("modelArn", "").rsplit("/", 1)[-1]
+            if underlying in legacy_bare_ids:
+                continue
+            profile_ids.append(profile["inferenceProfileId"])
     except (ClientError, BotoCoreError):
         print("   (inference profiles not listable, using bare model ids)")
 
-    if not ids:
+    all_ids = sorted(set(bare_ids) | set(profile_ids))
+    if not all_ids:
         fail(
             "no Claude models available",
             "Open the Bedrock console in this region, go to Model access, and\n"
             "  check what is enabled. You may need to request access.",
         )
 
-    for model_id in sorted(set(ids)):
+    for model_id in all_ids:
         marker = "  <-- cheapest, use this" if "haiku" in model_id.lower() else ""
         print(f"   {model_id}{marker}")
-    return sorted(set(ids))
+
+    # Profile ids are always directly invocable; a bare id sometimes is not. Among
+    # profile ids, prefer ones prefixed for this region's geography (e.g. "us." for
+    # us-east-1) over "global." ones: the sandbox account's service control policy
+    # denies bedrock:InvokeModel on "global." profiles even though list_inference_profiles
+    # happily lists them, so picking one blind fails with AccessDeniedException.
+    geo = REGION.split("-")[0]  # "us-east-1" -> "us"
+    regional = [p for p in profile_ids if p.startswith(f"{geo}.")]
+    return sorted(set(regional) or set(profile_ids)) or sorted(set(bare_ids))
 
 
 def test_call(model_id: str) -> None:
