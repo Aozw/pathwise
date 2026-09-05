@@ -1,16 +1,23 @@
-"""Profile ingestion — W3.1, the transcript parser.
+"""Profile ingestion — W3.1 transcript parser and W3.2 resume parser.
 
-Turns an uploaded NUS transcript (plain text) into a `StudentProfile`. The primary
-path is one Bedrock call forced into a structured schema, because real transcripts
-vary in layout far more than the committed fixture does. The fallback is a pure
-regex parser of the fixed-column format NUS actually emits: it needs no network, so
-it doubles as the thing CI exercises and as the fixture fallback the CLAUDE.md hard
-rule requires. Either way the extracted fields converge through `_to_profile`, so
-there is exactly one place that knows how to build a `StudentProfile`.
+`parse_transcript` turns an NUS transcript into a `StudentProfile` (name, year,
+major, completed modules, units). `parse_resume` turns a resume into a list of
+`Evidence` - things the student has demonstrably done, each tagged with the
+readiness `Dimension` it demonstrates. `build_profile` runs both and returns one
+`StudentProfile` with the evidence attached.
 
-`target_role` is not in a transcript — the student picks it in the UI — so it is a
-parameter here, validated against config.ROLE_DIMENSION_WEIGHTS. `evidence` stays
-empty: it comes from the resume (W3.2), not the transcript.
+Every parser has the same shape: one Bedrock call forced into a structured schema
+as the primary path, and a pure deterministic parser as the fallback - no network,
+so it doubles as the thing CI exercises and the fixture fallback the CLAUDE.md hard
+rule requires. Each pair converges through one builder (`_to_profile`,
+`_to_evidence`) so there is exactly one place that knows the target shape.
+
+`target_role` is not in a transcript - the student picks it in the UI - so it is a
+parameter, validated against config.ROLE_DIMENSION_WEIGHTS.
+
+`Evidence.dimension` is what `scoring.redundancy_penalty` matches on (a candidate
+that closes gaps in a dimension the student already has evidence in scores lower);
+`Evidence.label` is a short readable skill phrase for the UI and the planner prompt.
 
 Failure handling matches planner.py: boto retries disabled, one explicit retry, then
 the deterministic parser runs and a TraceEvent records that the fallback fired.
@@ -36,7 +43,14 @@ from src.config import (
     TOOL_RETRIES,
     TOOL_TIMEOUT_SECONDS,
 )
-from src.state import CompletedModule, StudentProfile, TraceEvent, TraceKind
+from src.state import (
+    CompletedModule,
+    Dimension,
+    Evidence,
+    StudentProfile,
+    TraceEvent,
+    TraceKind,
+)
 
 _TOOL_NAME = "record_profile"
 
@@ -309,13 +323,245 @@ def parse_transcript(transcript_text: str, target_role: str = DEFAULT_ROLE) -> T
     return TranscriptParse(profile=profile, trace=trace, used_fallback=used_fallback)
 
 
+# ---------------------------------------------------------------------------
+# W3.2 - resume parser. Produces Evidence, tagged by readiness Dimension.
+# ---------------------------------------------------------------------------
+
+_RESUME_TOOL_NAME = "record_evidence"
+
+_DIMENSION_VALUES = [dimension.value for dimension in Dimension]
+
+_RESUME_TOOL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "evidence": {
+            "type": "array",
+            "description": "One entry per distinct, concrete thing the student has "
+            "demonstrably done. Skip aspirational or coursework-only lines unless the "
+            "resume shows the skill was actually applied.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "label": {
+                        "type": "string",
+                        "description": "Short lowercase skill phrase, e.g. 'rest api', "
+                        "'relational databases', 'teaching'. Two or three words.",
+                    },
+                    "dimension": {
+                        "type": "string",
+                        "enum": _DIMENSION_VALUES,
+                        "description": "programming = writing application code and APIs; "
+                        "systems = OS, networks, concurrency, distributed systems; "
+                        "data = databases, pipelines, ML, analytics; "
+                        "tooling = git, containers, CI/CD, testing, cloud infra; "
+                        "communication = teaching, writing, presenting, leading.",
+                    },
+                    "source_text": {
+                        "type": "string",
+                        "description": "The resume line this came from, copied verbatim.",
+                    },
+                },
+                "required": ["label", "dimension", "source_text"],
+            },
+        }
+    },
+    "required": ["evidence"],
+}
+
+
+class _ExtractedEvidence(BaseModel):
+    label: str
+    dimension: Dimension
+    source_text: str
+
+
+class _ResumeExtracted(BaseModel):
+    evidence: list[_ExtractedEvidence] = Field(default_factory=list)
+
+
+def _to_evidence(extracted: _ResumeExtracted) -> list[Evidence]:
+    """Normalise and de-duplicate. `redundancy_penalty` works on the set of
+    dimensions, so a repeated (label, dimension) pair only adds noise to the UI.
+    """
+    seen: set[tuple[str, Dimension]] = set()
+    evidence: list[Evidence] = []
+    for item in extracted.evidence:
+        label = item.label.strip().lower()
+        key = (label, item.dimension)
+        if not label or key in seen:
+            continue
+        seen.add(key)
+        evidence.append(
+            Evidence(label=label, dimension=item.dimension, source_text=item.source_text.strip())
+        )
+    return evidence
+
+
+def _call_resume_bedrock(resume_text: str) -> _ResumeExtracted:
+    prompt = (
+        "Extract the skills this student has demonstrably applied from the resume "
+        "below. One evidence entry per distinct skill, each tagged with the readiness "
+        f"dimension it demonstrates. Call the {_RESUME_TOOL_NAME} tool with the result.\n\n"
+        f"RESUME:\n{resume_text}"
+    )
+    last_error: Exception | None = None
+    for _ in range(1 + TOOL_RETRIES):
+        try:
+            response = _bedrock().converse(
+                modelId=MODEL_HAIKU,
+                messages=[{"role": "user", "content": [{"text": prompt}]}],
+                toolConfig={
+                    "tools": [
+                        {
+                            "toolSpec": {
+                                "name": _RESUME_TOOL_NAME,
+                                "description": "Record the evidence extracted from a resume.",
+                                "inputSchema": {"json": _RESUME_TOOL_SCHEMA},
+                            }
+                        }
+                    ],
+                    "toolChoice": {"tool": {"name": _RESUME_TOOL_NAME}},
+                },
+                inferenceConfig={"temperature": 0, "maxTokens": 2000},
+            )
+            for block in response["output"]["message"]["content"]:
+                if "toolUse" in block:
+                    return _ResumeExtracted.model_validate(block["toolUse"]["input"])
+            raise ValueError("model did not call the record_evidence tool")
+        except (ClientError, BotoCoreError, ValidationError, ValueError, KeyError) as exc:
+            last_error = exc
+    raise RuntimeError(f"resume Bedrock call failed after retry: {last_error}") from last_error
+
+
+# Word-boundary keyword -> (label, dimension). Ordered roughly specific-first; every
+# match on a line is emitted, then _to_evidence de-duplicates. This is the fixture
+# fallback and the CI-testable path, not a claim to parse arbitrary prose well.
+_RESUME_KEYWORDS: list[tuple[str, str, Dimension]] = [
+    ("rest api", "rest api", Dimension.PROGRAMMING),
+    ("flask", "web backend", Dimension.PROGRAMMING),
+    ("spring boot", "web backend", Dimension.PROGRAMMING),
+    ("django", "web backend", Dimension.PROGRAMMING),
+    ("react", "frontend development", Dimension.PROGRAMMING),
+    ("flutter", "mobile development", Dimension.PROGRAMMING),
+    ("postgresql", "relational databases", Dimension.DATA),
+    ("mysql", "relational databases", Dimension.DATA),
+    ("sql", "sql", Dimension.DATA),
+    ("firebase", "cloud data stores", Dimension.DATA),
+    ("machine learning", "machine learning", Dimension.DATA),
+    ("data pipeline", "data pipelines", Dimension.DATA),
+    ("pytest", "automated testing", Dimension.TOOLING),
+    ("unit test", "automated testing", Dimension.TOOLING),
+    ("test coverage", "automated testing", Dimension.TOOLING),
+    ("docker", "containers", Dimension.TOOLING),
+    ("kubernetes", "container orchestration", Dimension.TOOLING),
+    ("git", "version control", Dimension.TOOLING),
+    ("ci/cd", "ci/cd", Dimension.TOOLING),
+    ("github actions", "ci/cd", Dimension.TOOLING),
+    ("postman", "api tooling", Dimension.TOOLING),
+    ("aws", "cloud infrastructure", Dimension.TOOLING),
+    ("distributed", "distributed systems", Dimension.SYSTEMS),
+    ("microservice", "distributed systems", Dimension.SYSTEMS),
+    ("concurren", "concurrency", Dimension.SYSTEMS),
+    ("operating system", "operating systems", Dimension.SYSTEMS),
+    ("networks", "networking", Dimension.SYSTEMS),
+    ("load balanc", "scalability", Dimension.SYSTEMS),
+    ("teaching assistant", "teaching", Dimension.COMMUNICATION),
+    ("lab session", "teaching", Dimension.COMMUNICATION),
+    ("graded assignments", "teaching", Dimension.COMMUNICATION),
+    ("mentor", "mentoring", Dimension.COMMUNICATION),
+    ("presented", "presenting", Dimension.COMMUNICATION),
+    ("led the", "leadership", Dimension.COMMUNICATION),
+    ("wrote feedback", "written communication", Dimension.COMMUNICATION),
+]
+
+
+def _deterministic_resume(resume_text: str) -> _ResumeExtracted:
+    items: list[_ExtractedEvidence] = []
+    for raw_line in resume_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        lowered = line.lower()
+        for keyword, label, dimension in _RESUME_KEYWORDS:
+            if re.search(rf"(?<![a-z]){re.escape(keyword)}(?![a-z])", lowered):
+                items.append(
+                    _ExtractedEvidence(label=label, dimension=dimension, source_text=line)
+                )
+    return _ResumeExtracted(evidence=items)
+
+
+@dataclass
+class ResumeParse:
+    evidence: list[Evidence]
+    trace: list[TraceEvent]
+    used_fallback: bool
+
+
+def parse_resume(resume_text: str) -> ResumeParse:
+    """Parse a resume into Evidence, falling back to the keyword parser."""
+    used_fallback = False
+    fallback_reason: str | None = None
+    try:
+        extracted = _call_resume_bedrock(resume_text)
+    except RuntimeError as exc:
+        extracted = _deterministic_resume(resume_text)
+        used_fallback = True
+        fallback_reason = str(exc)
+
+    evidence = _to_evidence(extracted)
+
+    trace: list[TraceEvent] = []
+    if used_fallback:
+        trace.append(
+            TraceEvent(
+                kind=TraceKind.OBSERVED,
+                agent="Profile Agent",
+                message="Resume parsed by the deterministic fallback parser",
+                detail=fallback_reason,
+            )
+        )
+    by_dimension = ", ".join(sorted({item.dimension.value for item in evidence})) or "none"
+    trace.append(
+        TraceEvent(
+            kind=TraceKind.OBSERVED,
+            agent="Profile Agent",
+            message=f"Extracted {len(evidence)} pieces of evidence from the resume "
+            f"(dimensions: {by_dimension})",
+        )
+    )
+    return ResumeParse(evidence=evidence, trace=trace, used_fallback=used_fallback)
+
+
+@dataclass
+class ProfileBuild:
+    profile: StudentProfile
+    trace: list[TraceEvent]
+    used_fallback: bool  # True if either parser fell back
+
+
+def build_profile(
+    transcript_text: str, resume_text: str, target_role: str = DEFAULT_ROLE
+) -> ProfileBuild:
+    """Run both parsers and return one StudentProfile with the evidence attached."""
+    transcript = parse_transcript(transcript_text, target_role)
+    resume = parse_resume(resume_text)
+    profile = transcript.profile.model_copy(update={"evidence": resume.evidence})
+    return ProfileBuild(
+        profile=profile,
+        trace=transcript.trace + resume.trace,
+        used_fallback=transcript.used_fallback or resume.used_fallback,
+    )
+
+
 if __name__ == "__main__":
-    # Manual check against the fixture. Not a pytest test — CLAUDE.md bars those from
+    # Manual check against the fixtures. Not a pytest test — CLAUDE.md bars those from
     # touching Bedrock. Run with credentials to exercise the model path:
     #   python -m src.agents.profile
     from pathlib import Path
 
-    text = (Path(__file__).parents[2] / "data" / "fixtures" / "transcript.txt").read_text()
-    result = parse_transcript(text)
-    print(f"used_fallback={result.used_fallback}")
-    print(json.dumps(result.profile.model_dump(mode="json"), indent=2))
+    fixtures = Path(__file__).parents[2] / "data" / "fixtures"
+    built = build_profile(
+        (fixtures / "transcript.txt").read_text(), (fixtures / "resume.txt").read_text()
+    )
+    print(f"used_fallback={built.used_fallback}")
+    print(json.dumps(built.profile.model_dump(mode="json"), indent=2))

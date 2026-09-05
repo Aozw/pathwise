@@ -1,9 +1,10 @@
-"""W3.1 — transcript parser.
+"""W3.1 transcript parser and W3.2 resume parser.
 
 The model path cannot run in CI (no credentials, and CLAUDE.md bars Bedrock from
-tests), so these exercise the deterministic parser directly and drive
-`parse_transcript` by monkeypatching `_call_bedrock` — either raising to force the
-fallback, or returning a canned extraction to check the success path.
+tests), so these exercise the deterministic parsers directly and drive
+`parse_transcript` / `parse_resume` by monkeypatching the `_call_*_bedrock`
+functions — either raising to force the fallback, or returning a canned extraction
+to check the success path.
 """
 
 from __future__ import annotations
@@ -15,18 +16,31 @@ import pytest
 from src.agents import profile as profile_mod
 from src.agents.profile import (
     _deterministic_extract,
+    _deterministic_resume,
     _Extracted,
+    _ExtractedEvidence,
     _ExtractedModule,
     _infer_year,
+    _ResumeExtracted,
+    _to_evidence,
+    build_profile,
+    parse_resume,
     parse_transcript,
 )
+from src.state import Dimension
 
-FIXTURE = Path(__file__).parent.parent / "data" / "fixtures" / "transcript.txt"
+FIXTURES = Path(__file__).parent.parent / "data" / "fixtures"
+FIXTURE = FIXTURES / "transcript.txt"
 
 
 @pytest.fixture
 def transcript_text() -> str:
     return FIXTURE.read_text()
+
+
+@pytest.fixture
+def resume_text() -> str:
+    return (FIXTURES / "resume.txt").read_text()
 
 
 # ---------------------------------------------------------------------------
@@ -132,3 +146,112 @@ def test_parse_transcript_uses_model_result_when_bedrock_succeeds(
 def test_parse_transcript_rejects_unknown_target_role(transcript_text: str):
     with pytest.raises(ValueError, match="ROLE_DIMENSION_WEIGHTS"):
         parse_transcript(transcript_text, target_role="astronaut")
+
+
+# ---------------------------------------------------------------------------
+# W3.2 — resume parser, deterministic path
+# ---------------------------------------------------------------------------
+
+
+def test_deterministic_resume_finds_evidence_across_dimensions(resume_text: str):
+    evidence = _to_evidence(_deterministic_resume(resume_text))
+    labels = {e.label for e in evidence}
+    dimensions = {e.dimension for e in evidence}
+
+    assert "rest api" in labels
+    assert "automated testing" in labels
+    assert "teaching" in labels
+    assert {"relational databases", "sql"} & labels
+    # this resume shows no systems work — that is the student's actual gap, so the
+    # redundancy penalty must not later see systems evidence
+    assert Dimension.SYSTEMS not in dimensions
+    assert {Dimension.PROGRAMMING, Dimension.DATA, Dimension.TOOLING, Dimension.COMMUNICATION} <= dimensions
+
+
+def test_deterministic_resume_does_not_match_keywords_inside_other_words(resume_text: str):
+    # "github.com/weilingtan" must not register as "git" -> version control on its own;
+    # version control should come only from the real "Tools: Git, ..." line.
+    evidence = _to_evidence(_deterministic_resume(resume_text))
+    vc = [e for e in evidence if e.label == "version control"]
+    assert len(vc) == 1
+    assert "Tools:" in vc[0].source_text
+
+
+def test_deterministic_resume_carries_the_source_line(resume_text: str):
+    evidence = _to_evidence(_deterministic_resume(resume_text))
+    rest_api = next(e for e in evidence if e.label == "rest api")
+    assert rest_api.source_text == "Built a REST API in Flask for the internal reporting dashboard."
+
+
+def test_to_evidence_deduplicates_and_normalises():
+    extracted = _ResumeExtracted(
+        evidence=[
+            _ExtractedEvidence(label="REST API", dimension=Dimension.PROGRAMMING, source_text="a"),
+            _ExtractedEvidence(label="rest api", dimension=Dimension.PROGRAMMING, source_text="b"),
+            _ExtractedEvidence(label="  ", dimension=Dimension.DATA, source_text="c"),
+        ]
+    )
+    evidence = _to_evidence(extracted)
+    assert [e.label for e in evidence] == ["rest api"]
+    assert evidence[0].source_text == "a"  # first wins
+
+
+# ---------------------------------------------------------------------------
+# W3.2 — resume parser, model path and fallback
+# ---------------------------------------------------------------------------
+
+
+def test_parse_resume_falls_back_and_traces_when_bedrock_fails(
+    resume_text: str, monkeypatch: pytest.MonkeyPatch
+):
+    def boom(_text: str):
+        raise RuntimeError("resume Bedrock call failed after retry: no credentials")
+
+    monkeypatch.setattr(profile_mod, "_call_resume_bedrock", boom)
+    result = parse_resume(resume_text)
+
+    assert result.used_fallback is True
+    assert result.evidence
+    assert any("fallback" in event.message.lower() for event in result.trace)
+
+
+def test_parse_resume_uses_model_result_when_bedrock_succeeds(monkeypatch: pytest.MonkeyPatch):
+    canned = _ResumeExtracted(
+        evidence=[
+            _ExtractedEvidence(
+                label="kafka streams",
+                dimension=Dimension.SYSTEMS,
+                source_text="Built an event pipeline on Kafka",
+            )
+        ]
+    )
+    monkeypatch.setattr(profile_mod, "_call_resume_bedrock", lambda _text: canned)
+    result = parse_resume("irrelevant")
+
+    assert result.used_fallback is False
+    assert [(e.label, e.dimension) for e in result.evidence] == [
+        ("kafka streams", Dimension.SYSTEMS)
+    ]
+
+
+# ---------------------------------------------------------------------------
+# build_profile — both parsers together
+# ---------------------------------------------------------------------------
+
+
+def test_build_profile_attaches_resume_evidence_to_the_transcript_profile(
+    transcript_text: str, resume_text: str, monkeypatch: pytest.MonkeyPatch
+):
+    def unavailable(_text: str):
+        raise RuntimeError("Bedrock call failed after retry")
+
+    monkeypatch.setattr(profile_mod, "_call_bedrock", unavailable)
+    monkeypatch.setattr(profile_mod, "_call_resume_bedrock", unavailable)
+
+    built = build_profile(transcript_text, resume_text, target_role="backend_infrastructure")
+
+    assert built.used_fallback is True
+    assert len(built.profile.completed_modules) == 18  # from the transcript
+    assert built.profile.evidence  # from the resume
+    assert built.profile.evidence_labels  # the frozen helper still works
+    assert all(isinstance(e.dimension, Dimension) for e in built.profile.evidence)
