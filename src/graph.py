@@ -17,9 +17,9 @@ Two nodes below are temporary and live in this file rather than their eventual h
     extend to writing Stevson's node. Replace `_profile_stub` with an import of
     `profile_node` from src.agents.profile once W3.1 lands.
   * score: src/scoring.py is W1.4, not yet built. `_score_stub` is a pure pass-through
-    (it does not rewrite `candidates`, since that channel's reducer is operator.add and
-    a real scoring node would need to replace entries rather than append duplicates —
-    that reducer-vs-rewrite question is W1.4's to resolve, not the skeleton's).
+    that does not write `state["ranked"]` at all yet. The real score node will populate
+    `ranked` (plain last-write-wins) rather than rewriting `candidates` (operator.add) -
+    see the RunState docstring in state.py for why the two fields are split.
 """
 
 from __future__ import annotations
