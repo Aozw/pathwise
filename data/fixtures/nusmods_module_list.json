@@ -1,0 +1,44 @@
+[
+  {
+    "moduleCode": "CS3210",
+    "title": "Parallel Computing",
+    "description": "Parallel architectures, shared-memory and message-passing programming models, performance analysis, and the design of parallel algorithms.",
+    "moduleCredit": "4",
+    "prereqTree": { "or": ["CS2100", "CS2106"] }
+  },
+  {
+    "moduleCode": "CS3211",
+    "title": "Parallel and Concurrent Programming",
+    "description": "Concurrency, synchronisation, deadlock, and the design of correct concurrent programs. Covers threads, locks, message passing and formal reasoning about concurrent behaviour.",
+    "moduleCredit": "4",
+    "prereqTree": { "and": ["CS2106"] }
+  },
+  {
+    "moduleCode": "CS3223",
+    "title": "Database Systems Implementation",
+    "description": "Storage management, indexing, query processing and optimisation, transaction management and concurrency control inside a relational database engine.",
+    "moduleCredit": "4",
+    "prereqTree": { "and": ["CS2102"] }
+  },
+  {
+    "moduleCode": "CS4231",
+    "title": "Parallel and Distributed Algorithms",
+    "description": "Distributed systems fundamentals: consensus, fault tolerance, replication, logical clocks and the impossibility results that shape practical system design.",
+    "moduleCredit": "4",
+    "prereqTree": { "and": ["CS3210"] }
+  },
+  {
+    "moduleCode": "CS2102",
+    "title": "Database Systems",
+    "description": "Relational model, SQL, schema design, normalisation and an introduction to transaction processing.",
+    "moduleCredit": "4",
+    "prereqTree": { "or": ["CS1231S", "CS1231"] }
+  },
+  {
+    "moduleCode": "CS3103",
+    "title": "Computer Networks Practice",
+    "description": "Hands-on network programming: socket programming, protocol implementation, network measurement and performance troubleshooting.",
+    "moduleCredit": "4",
+    "prereqTree": { "and": ["CS2105"] }
+  }
+]
