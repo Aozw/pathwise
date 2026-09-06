@@ -48,6 +48,9 @@ async function callBackend(action, extra) {
 
 const AUTO_DEFAULT = { addToRoadmap: false };
 
+const NO_UPLOADS = { transcript: null, resume: null };
+const NO_DRAG = { transcript: false, resume: false };
+
 let state = {
   screen: 'onboarding', step: 1,
   runId: null, backend: null, approvedIds: [],
@@ -55,6 +58,10 @@ let state = {
   logOpen: false, logCandidateId: '', logOutcome: 'not_shortlisted',
   sc: {}, settingsOpen: false,
   approvalOpen: false, approvalActionId: null, autoApprove: { ...AUTO_DEFAULT },
+  // Step 1 file picker — display only. Nothing here is read or sent to the backend;
+  // every run still plans against the fixture transcript/resume (see profile_node's
+  // docstring: a real upload needs a frozen-contract change nobody has made yet).
+  uploads: { ...NO_UPLOADS }, dragOver: { ...NO_DRAG },
 };
 
 function setState(patch) {
@@ -163,7 +170,7 @@ function goDash() { setState({ screen: 'dashboard' }); }
 function goStudy() { setState({ screen: 'study' }); }
 function goHack() { setState({ screen: 'hackathons' }); }
 function goIntern() { setState({ screen: 'internships' }); }
-function goOnboarding() { setState({ screen: 'onboarding', step: 1 }); }
+function goOnboarding() { setState({ screen: 'onboarding', step: 1, uploads: { ...NO_UPLOADS }, dragOver: { ...NO_DRAG } }); }
 function goStep(n) { setState({ step: n }); }
 
 function resetDemo() {
@@ -172,7 +179,37 @@ function resetDemo() {
     screen: 'onboarding', step: 1, runId: null, backend: null, approvedIds: [],
     loading: false, error: null, logOpen: false, sc: {}, settingsOpen: false,
     approvalOpen: false, approvalActionId: null, autoApprove: { ...AUTO_DEFAULT },
+    uploads: { ...NO_UPLOADS }, dragOver: { ...NO_DRAG },
   });
+}
+
+// — Step 1 file picker (display only — see the `uploads` comment above) —
+
+function pickFile(kind) { document.getElementById(`file-${kind}`).click(); }
+
+function setUpload(kind, file) {
+  if (!file) return;
+  setState(p => ({ uploads: { ...p.uploads, [kind]: { name: file.name, size: file.size } } }));
+}
+function clearUpload(kind) { setState(p => ({ uploads: { ...p.uploads, [kind]: null } })); }
+function onFileInputChange(kind, input) {
+  setUpload(kind, input.files && input.files[0]);
+  input.value = '';
+}
+function onDropFile(kind, e) {
+  e.preventDefault();
+  setState(p => ({ dragOver: { ...p.dragOver, [kind]: false } }));
+  setUpload(kind, e.dataTransfer.files && e.dataTransfer.files[0]);
+}
+function setDragOver(kind, on) {
+  if (state.dragOver[kind] === on) return;
+  setState(p => ({ dragOver: { ...p.dragOver, [kind]: on } }));
+}
+
+function formatBytes(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
 // — icons —
@@ -249,7 +286,30 @@ function candidateCard(v, candidate, rank) {
   );
 }
 
+function uploadDropzone(v, kind, label, iconPaths, accept) {
+  const file = v.uploads[kind];
+  const dragging = v.dragOver[kind];
+  const dropStyle = dragging ? 'border-color:var(--color-accent-700);background:var(--color-accent-100)' : '';
+  const body = file
+    ? `${icon(ICON_CHECK, 26, 'margin-bottom:10px').replace('stroke="currentColor"', 'stroke="var(--color-accent-700)"')}
+       <div class="card-title" style="font-size:15.5px;margin-bottom:4px">${label}</div>
+       <p class="card-body" style="font-size:12.5px;margin:0 0 10px;word-break:break-all">${file.name} · ${formatBytes(file.size)}</p>
+       <button type="button" class="btn btn-ghost" style="font-size:11.5px;padding:4px 12px" onclick="event.stopPropagation();clearUpload('${kind}')">Remove</button>`
+    : `${icon(iconPaths, 26, 'margin-bottom:10px').replace('stroke="currentColor"', 'stroke="var(--color-accent-700)"').replace('stroke-width="2"', 'stroke-width="1.6"')}
+       <div class="card-title" style="font-size:15.5px;margin-bottom:4px">${label}</div>
+       <p class="card-body" style="font-size:12.5px;margin:0">Drag and drop, or click to browse</p>`;
+  return `<div class="card" style="padding:26px 22px;border-style:dashed;text-align:center;cursor:pointer;${dropStyle}"
+      onclick="pickFile('${kind}')"
+      ondragover="event.preventDefault();setDragOver('${kind}',true)"
+      ondragleave="setDragOver('${kind}',false)"
+      ondrop="onDropFile('${kind}', event)">
+    <input type="file" id="file-${kind}" accept="${accept}" style="display:none" onchange="onFileInputChange('${kind}', this)">
+    ${body}
+  </div>`;
+}
+
 function renderOnboarding(v) {
+  const bothUploaded = !!v.uploads.transcript && !!v.uploads.resume;
   const step1 = `
     <span style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-accent-700)">Step 1 of 3</span>
     <h1 style="font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:34px;margin:8px 0 10px">Upload your transcript and resume</h1>
@@ -259,24 +319,16 @@ function renderOnboarding(v) {
         ${icon(ICON_INFO, 16, 'flex:none;margin-top:2px').replace('stroke="currentColor"', 'stroke="var(--color-neutral-600)"').replace('stroke-width="2"','stroke-width="1.8"')}
         <div>
           <div style="font-size:13px;margin-bottom:3px">This demo plans against one fixture student</div>
-          <p style="margin:0;font-size:12.5px;color:var(--color-neutral-700);line-height:1.55">Accepting your own transcript upload needs a change to the frozen state contract that hasn't landed yet, so every run plans against the committed sample transcript and resume (Tan Wei Ling, Y2 Computer Science) rather than a file you drop here. Everything past this screen — the profile, the readiness scores, the ranked plan — is real output from that fixture, produced by the same Bedrock calls a real upload would go through.</p>
+          <p style="margin:0;font-size:12.5px;color:var(--color-neutral-700);line-height:1.55">You can browse or drag a real file into the boxes below and we'll show it right here — but parsing it needs a change to the frozen state contract that hasn't landed yet, so every run still plans against the committed sample transcript and resume (Tan Wei Ling, Y2 Computer Science). Everything past this screen — the profile, the readiness scores, the ranked plan — is real output from that fixture, produced by the same Bedrock calls a real upload would go through.</p>
         </div>
       </div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:26px">
-      <div class="card" style="padding:26px 22px;border-style:dashed;text-align:center;opacity:.6">
-        ${icon(ICON_UPLOAD, 26, 'margin-bottom:10px').replace('stroke="currentColor"', 'stroke="var(--color-accent-700)"').replace('stroke-width="2"','stroke-width="1.6"')}
-        <div class="card-title" style="font-size:15.5px;margin-bottom:4px">Academic transcript</div>
-        <p class="card-body" style="font-size:12.5px;margin:0 0 12px">transcript.txt (fixture)</p>
-      </div>
-      <div class="card" style="padding:26px 22px;border-style:dashed;text-align:center;opacity:.6">
-        ${icon(ICON_RESUME, 26, 'margin-bottom:10px').replace('stroke="currentColor"', 'stroke="var(--color-accent-700)"').replace('stroke-width="2"','stroke-width="1.6"')}
-        <div class="card-title" style="font-size:15.5px;margin-bottom:4px">Resume</div>
-        <p class="card-body" style="font-size:12.5px;margin:0 0 12px">resume.txt (fixture)</p>
-      </div>
+      ${uploadDropzone(v, 'transcript', 'Academic transcript', ICON_UPLOAD, '.pdf,.doc,.docx,.txt')}
+      ${uploadDropzone(v, 'resume', 'Resume', ICON_RESUME, '.pdf,.doc,.docx,.txt')}
     </div>
     <div style="display:flex;justify-content:flex-end;gap:12px">
-      <button type="button" class="btn btn-primary" onclick="goStep(2)">Continue${icon(ICON_ARROW, 14)}</button>
+      <button type="button" class="btn btn-primary" ${bothUploaded ? '' : 'disabled'} onclick="goStep(2)">Continue${icon(ICON_ARROW, 14)}</button>
     </div>`;
   const step2 = `
     <span style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-accent-700)">Step 2 of 3</span>
@@ -618,6 +670,7 @@ function computeVals() {
     settingsOpen: s.settingsOpen,
     autoApprove: s.autoApprove,
     sc: s.sc,
+    uploads: s.uploads, dragOver: s.dragOver,
   };
 }
 
