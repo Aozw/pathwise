@@ -31,7 +31,12 @@ from botocore.config import Config
 CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "content-type",
+    # x-amz-content-sha256 is required alongside content-type: CloudFront's OAC
+    # signs the request to the Lambda Function URL, but Lambda needs the client's
+    # own body hash for unsigned POST/PUT (see infra/spike_test/index.html). Without
+    # it here, the browser's preflight rejects the header and every real call from
+    # web/ fails as a CORS error before ever reaching this handler - W4.4.
+    "Access-Control-Allow-Headers": "content-type, x-amz-content-sha256",
     "Content-Type": "application/json",
 }
 

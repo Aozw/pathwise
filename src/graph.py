@@ -4,11 +4,10 @@ Flow:
     START -> profile -> planner -> (fan out on dispatch) -> module / event / project
            -> score -> refine_gate -> planner (loop, capped) or act -> END
 
-One node below is still a temporary placeholder living here rather than its eventual
-home: `profile`. src/agents/profile.py is Stevson/Aaron's (W3.1-W3.3) and is empty
-right now. This file cannot depend on it without breaking the graph, and W1/W2
-ownership does not extend to writing that node. Replace `_profile_stub` with an
-import of `profile_node` from src.agents.profile once W3.1 lands.
+`profile` is the real node from src.agents.profile (W3.1-W3.3), wired in once those
+landed. It reads the committed fixture transcript/resume, not a per-request upload -
+see that module's docstring for why accepting a student's own transcript needs a
+frozen-contract change that is out of scope here.
 
 `score` is real (see `_score_node` below). It calls Bedrock once per scoring pass -
 a single batched call judging every candidate, not one call each - for the two
@@ -53,10 +52,10 @@ from src import state as _state_module
 from src.agents.event import event_node
 from src.agents.module import module_node
 from src.agents.planner import planner_node
+from src.agents.profile import profile_node
 from src.agents.project import project_node
 from src.config import (
     AWS_REGION,
-    DEFAULT_ROLE,
     MAX_CANDIDATES_SCORED,
     MAX_REFINE_ITERATIONS,
     MODEL_HAIKU,
@@ -69,9 +68,6 @@ from src.metrics import ModelCallStats, apply_model_call, token_usage
 from src.scoring import compose_score
 from src.state import (
     Candidate,
-    Dimension,
-    DimensionScore,
-    Gap,
     PendingAction,
     Readiness,
     RunMetrics,
@@ -94,45 +90,6 @@ NODE_BY_AGENT_NAME = {
     "Event Agent": "event",
     "Project Agent": "project",
 }
-
-
-def _profile_stub(state: RunState) -> dict:
-    """Temporary placeholder — see module docstring. Do not edit profile.py to replace this."""
-    profile = StudentProfile(
-        name="Tan Wei Ling",  # matches data/fixtures/transcript.txt and resume.txt
-        year=2,
-        major="Computer Science",
-        target_role=DEFAULT_ROLE,
-        units_completed=72,
-    )
-    readiness = Readiness(
-        dimensions=[
-            DimensionScore(dimension=dimension, score=0.5, rationale="stub, not assessed")
-            for dimension in Dimension
-        ],
-        gaps=[
-            Gap(
-                dimension=Dimension.SYSTEMS,
-                label="Distributed systems",
-                priority=1,
-                current=0.3,
-                target=0.8,
-            )
-        ],
-    )
-    return {
-        "profile": profile,
-        "readiness": readiness,
-        "trace": [
-            TraceEvent(
-                kind=TraceKind.OBSERVED,
-                agent="Profile Agent",
-                message="Loaded stub profile and readiness",
-                detail="Placeholder in graph.py. Real transcript/resume parsing and "
-                "readiness assessment are W3.1-W3.3.",
-            )
-        ],
-    }
 
 
 def _fan_out(state: RunState) -> list[str]:
@@ -442,7 +399,7 @@ def _act_node(state: RunState) -> dict:
 def build_graph():
     builder = StateGraph(RunState)
 
-    builder.add_node("profile", _profile_stub)
+    builder.add_node("profile", profile_node)
     builder.add_node("planner", planner_node)
     builder.add_node("module", module_node)
     builder.add_node("event", event_node)
