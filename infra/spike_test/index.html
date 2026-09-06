@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pathwise deploy spike</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 60px auto; padding: 0 20px; }
+  button { font-size: 15px; padding: 8px 16px; cursor: pointer; }
+  pre { background: #f4f4f4; padding: 12px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
+</style>
+</head>
+<body>
+<h1>Pathwise — W4.2 deploy spike</h1>
+<p>Verifies the full path: S3 static page &rarr; CloudFront &rarr; Lambda &rarr; AgentCore Runtime.</p>
+<p>Endpoint: <code id="endpoint"></code></p>
+<button onclick="ping()">Call the deployed agent</button>
+<pre id="result">(not called yet)</pre>
+<script>
+// Set at upload time by infra/deploy_s3_site.py — not hardcoded in source control.
+const ENDPOINT = "__ENDPOINT__";
+document.getElementById("endpoint").textContent = ENDPOINT;
+
+async function sha256Hex(text) {
+  const bytes = new TextEncoder().encode(text);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function ping() {
+  const out = document.getElementById("result");
+  out.textContent = "calling...";
+  try {
+    const body = JSON.stringify({ prompt: "hello from the browser" });
+    // CloudFront's OAC signs the request to the Lambda Function URL, but Lambda
+    // doesn't support unsigned payloads for POST/PUT — the client must supply
+    // this hash itself. See AWS docs: "Restrict access to a Lambda function
+    // URL origin". No AWS credentials involved, just a hash of our own body.
+    const bodyHash = await sha256Hex(body);
+    const res = await fetch(ENDPOINT, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-amz-content-sha256": bodyHash,
+      },
+      body,
+    });
+    const responseBody = await res.text();
+    out.textContent = `HTTP ${res.status}\n${responseBody}`;
+  } catch (err) {
+    out.textContent = "fetch failed: " + err;
+  }
+}
+</script>
+</body>
+</html>
