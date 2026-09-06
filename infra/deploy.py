@@ -68,7 +68,12 @@ def missing_env_vars(environ: dict[str, str]) -> list[str]:
 
 def _ensure_credentials() -> None:
     print("=== 0/4  credentials ===")
-    load_dotenv()
+    # override=True: STS credentials expire every 12 hours and get pasted into .env
+    # as a refresh, but load_dotenv()'s default never overwrites a var already
+    # exported in the shell (e.g. from the access portal's "export ..." snippet
+    # pasted alongside .env) - so a stale exported value would silently win over a
+    # fresh .env one and this whole check would pass against the wrong token.
+    load_dotenv(override=True)
 
     missing = missing_env_vars(os.environ)
     if missing:
