@@ -7,6 +7,14 @@ Lambda. Same public-static-website pattern as `deploy_s3_site.py`, kept as a
 separate bucket so the spike page and the real frontend don't overwrite each
 other.
 
+The bucket's own S3 website endpoint is HTTP-only (S3 website endpoints never
+support TLS), which broke `web/app.js`'s `crypto.subtle.digest()` call -
+SubtleCrypto doesn't exist outside a secure context, so Step 3 of onboarding
+threw "Cannot read properties of undefined (reading 'digest')" the moment a
+student clicked "Build my plan". `deploy_web_cloudfront.py` puts a second,
+unrelated CloudFront distribution in front of this bucket purely to get an
+HTTPS URL; see that module for why it needs no OAC.
+
 Idempotent: reruns reuse the existing bucket and just re-upload the files.
 
 Usage:
@@ -21,6 +29,7 @@ from pathlib import Path
 
 import boto3
 from botocore.exceptions import ClientError
+from deploy_web_cloudfront import deploy_web_cloudfront
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WEB_DIR = REPO_ROOT / "web"
@@ -93,7 +102,10 @@ def upload_site(s3, name: str, endpoint: str) -> None:
 
 
 def deploy_web(cloudfront_domain_or_url: str) -> str:
-    """Upload `web/` to S3, wiring app.js at the CloudFront endpoint. Returns the site URL."""
+    """Upload `web/` to S3, wiring app.js at the CloudFront endpoint, then front
+    the site itself with its own CloudFront distribution so it's served over
+    HTTPS. Returns the site's HTTPS URL.
+    """
     endpoint = cloudfront_domain_or_url
     if not endpoint.startswith("http"):
         endpoint = f"https://{endpoint}/"
@@ -106,7 +118,9 @@ def deploy_web(cloudfront_domain_or_url: str) -> str:
     configure_public_website(s3, name)
     upload_site(s3, name, endpoint)
 
-    return f"http://{name}.s3-website-{REGION}.amazonaws.com"
+    website_domain = f"{name}.s3-website-{REGION}.amazonaws.com"
+    site_domain = deploy_web_cloudfront(website_domain)
+    return f"https://{site_domain}"
 
 
 def main() -> None:
