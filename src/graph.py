@@ -291,22 +291,18 @@ def _score_node(state: RunState) -> dict:
     for candidate in candidates:
         judgment = judgments.get(candidate.id)
         if judgment is None:
-            gap_coverage, role_fit = 0.5, 0.5
-            rationale = "Fallback: no model judgment for this candidate."
-            closed_gaps: list[str] = []
-        else:
-            gap_coverage, role_fit, rationale = (
-                judgment.gap_coverage,
-                judgment.role_fit,
-                judgment.rationale,
-            )
-            # Keep only labels that are real priority gaps - the model occasionally
-            # paraphrases or invents one, and a bad label would silently distort the
-            # redundancy penalty.
-            closed_gaps = [label for label in judgment.closed_gaps if label in gap_dimensions]
+            # No real model judgment for this candidate - do not rank it on a
+            # fabricated 0.5/0.5 guess. A candidate presented as a scored,
+            # ranked recommendation must trace to an actual model judgment.
+            continue
+        # Keep only labels that are real priority gaps - the model occasionally
+        # paraphrases or invents one, and a bad label would silently distort the
+        # redundancy penalty.
+        closed_gaps = [label for label in judgment.closed_gaps if label in gap_dimensions]
         scored = candidate.model_copy(update={"closes_gaps": closed_gaps})
         scores = compose_score(
-            scored, profile, gap_coverage, role_fit, gap_dimensions, rationale
+            scored, profile, judgment.gap_coverage, judgment.role_fit, gap_dimensions,
+            judgment.rationale,
         )
         if scores.total >= SCORE_THRESHOLD:
             ranked.append(scored.model_copy(update={"scores": scores}))
