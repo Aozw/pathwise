@@ -57,7 +57,7 @@ S3_RUNS_PREFIX = "runs/"
 MAX_REFINE_ITERATIONS = 3
 MAX_CANDIDATES_SCORED = 30  # never send more than this to the scoring model
 SHORTLIST_K = 25  # semantic shortlist size, if W2.1b gets built
-SCORE_THRESHOLD = 0.55  # below this a candidate is not shown
+SCORE_THRESHOLD = 0.05  # below this a candidate is not shown
 
 TOOL_TIMEOUT_SECONDS = 8
 TOOL_RETRIES = 1  # one retry, then fall back to the fixture
