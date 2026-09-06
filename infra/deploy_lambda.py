@@ -179,7 +179,8 @@ def ensure_function_url(lam) -> str:
     return resp["FunctionUrl"]
 
 
-def main() -> None:
+def deploy_lambda() -> str:
+    """Build and deploy the proxy Lambda + Function URL. Returns the Function URL."""
     agent_arn, region = load_agent_arn()
     print(f"Agent ARN: {agent_arn}\nRegion: {region}\n")
 
@@ -193,8 +194,11 @@ def main() -> None:
     time.sleep(10)
 
     ensure_function(lam, role_arn, agent_arn)
-    url = ensure_function_url(lam)
+    return ensure_function_url(lam)
 
+
+def main() -> None:
+    url = deploy_lambda()
     print(f"\nFunction URL: {url}")
     print("Test it with:")
     print(f'  curl -X POST {url} -H "content-type: application/json" -d \'{{"prompt": "test"}}\'')

@@ -136,7 +136,8 @@ def ensure_lambda_permission(lam, distribution_arn: str) -> None:
             print(f"{action} permission already present")
 
 
-def main() -> None:
+def deploy_cloudfront() -> str:
+    """Ensure the CloudFront distribution in front of the proxy Lambda. Returns its domain."""
     lam = boto3.client("lambda", region_name=REGION)
     cf = boto3.client("cloudfront", region_name=REGION)
 
@@ -148,10 +149,14 @@ def main() -> None:
     distribution_arn = dist.get("ARN") or f"arn:aws:cloudfront::{boto3.client('sts').get_caller_identity()['Account']}:distribution/{dist['Id']}"
 
     ensure_lambda_permission(lam, distribution_arn)
+    return dist["DomainName"]
 
-    print(f"\nCloudFront domain: https://{dist['DomainName']}")
+
+def main() -> None:
+    domain = deploy_cloudfront()
+    print(f"\nCloudFront domain: https://{domain}")
     print("Propagation typically takes 5-15 minutes. Test with:")
-    print(f'  curl -X POST https://{dist["DomainName"]}/ -H "content-type: application/json" -d \'{{"prompt": "test"}}\'')
+    print(f'  curl -X POST https://{domain}/ -H "content-type: application/json" -d \'{{"prompt": "test"}}\'')
 
 
 if __name__ == "__main__":
