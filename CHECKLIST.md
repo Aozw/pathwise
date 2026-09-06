@@ -164,28 +164,28 @@ done.
 
 ---
 
-### Step 11a — Module embedding index (W2.1b) — CUT
-**Owner:** unassigned
+### Step 11a — Module embedding index (W2.1b) — REINSTATED 6 September
+**Owner:** Alvin
 
-**Skip this step.** With W2 reassigned to Alvin there is no capacity for it. The Module Agent
-passes eligible candidates straight to scoring with a fixed cap. If Step 15 passes early on Sunday
-and Alvin has room, reinstate it; otherwise remove the shortlist box from the architecture diagram
-before submission so the deck matches what you built.
+Reinstated during Step 15 verification against real Bedrock: without it, the Module Agent's
+only ranking was catalogue order, so every real run scored 0 candidates above threshold - not
+a slide point, the setback path literally could not be demonstrated.
 
-The criteria below apply only if it is reinstated.
-
-- [ ] ~6000 NUSMods module descriptions embedded once, offline, by a script in the repo
-- [ ] Result committed as a numpy array in `data/index/`
-- [ ] `src/tools/retrieval.py` exposes `shortlist(gap_text, eligible_ids, k)`
-- [ ] No FAISS, Chroma, pgvector or S3 Vectors anywhere in `requirements.txt`
+- [x] ~6000 (actual: 7138) NUSMods module descriptions embedded once, offline, by
+      `build_module_index.py` (repo root), resumable and backing off on Titan throttling
+- [x] Result committed as a numpy array in `data/index/module_embeddings.npz` (27MB, all 7138)
+- [x] `src/tools/retrieval.py` exposes `shortlist(gap_text, eligible_ids, k) -> (codes, used_fallback)`
+      - the bool return deviates from PLAN.md's literal signature; see that file's W2.1b amendment
+- [x] No FAISS, Chroma, pgvector or S3 Vectors anywhere in `requirements.txt`
 
 **Done when:** querying the index with "distributed systems" returns modules a human would agree
 are about distributed systems, and querying with a gap the catalogue does not cover returns
 nothing convincing rather than confident nonsense. Check ten queries by eye. Separately, confirm
 the index loads in under a second from a cold process, since it sits on the AgentCore cold path.
 
-**Cut this first** if W2.0 or W2.2 runs long. It is a token saving and a slide point, not
-structure.
+Verified: "distributed systems and concurrency" top hits were CS3211/CS5223/CS4231 (Parallel and
+Concurrent Programming, Distributed Systems, Parallel and Distributed Algorithms); "accounting and
+financial reporting" top hits were ACC2707/ACC2708. Cold `np.load` measured at 136ms.
 
 ---
 

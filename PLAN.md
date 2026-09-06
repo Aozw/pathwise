@@ -296,7 +296,7 @@ diffs, which costs him nothing.
   changes the architecture and the diagram. Do not build around an endpoint you have not called.
 - **W2.1** NUSMods: fetch the module list and module info once, cache to `data/cache/`, commit a
   trimmed subset to `data/fixtures/`. Never fetch this per run; it is large and static.
-- **W2.1b** Module embedding index. Embed the ~6000 NUSMods module descriptions once, offline, with
+- **W2.1b — reinstated 6 September**, per the note below. Module embedding index. Embed the ~6000 NUSMods module descriptions once, offline, with
   Titan, and commit the result as a numpy array in `data/index/`. Roughly 24MB, well inside GitHub
   limits, and it loads instantly at cold start. `src/tools/retrieval.py` exposes
   `shortlist(gap_text, eligible_ids, k) -> list[str]` doing cosine similarity by dot product.
@@ -305,6 +305,19 @@ diffs, which costs him nothing.
   benefit. Exactly one embedding call at runtime, for the query. This task is standalone and
   produces a committed artifact, so it carries no integration risk; do it while you are still in the
   catalogue code from W2.1.
+
+  **Amendment, 6 September, Step 15 verification against real Bedrock:** without this, the Module
+  Agent's only ranking was NUSMods catalogue order, so the 30 candidates handed to scoring were
+  essentially unrelated to the student's actual gap - every real run scored 0 candidates above
+  `SCORE_THRESHOLD`, not just for the setback re-plan but for the very first onboarding
+  recommendation too. Reinstated: `build_module_index.py` (repo root) embedded the real 7138-module
+  catalogue with `amazon.titan-embed-text-v2:0` (confirmed ON_DEMAND in this account's region);
+  `data/index/module_embeddings.npz` (27MB) is committed; `src/tools/retrieval.py::shortlist()`
+  deviates slightly from the signature above by returning `(codes, used_fallback)` rather than a
+  bare `list[str]`, so `module_node` can write the required fallback TraceEvent per the CLAUDE.md
+  hard rule on external calls. Re-ran the real onboard flow after: 8 of 30 candidates cleared
+  threshold, all genuinely on-topic (e.g. `CS5223 Distributed Systems`, a GitHub distributed
+  rate limiter).
 - **W2.2** Prerequisite parser. NUSMods prerequisite trees are nested and irregular. Write
   `is_eligible(module, completed_modules) -> bool` as a pure function with unit tests. This is
   one of only two places that can produce a real accuracy number for the slides, so it matters

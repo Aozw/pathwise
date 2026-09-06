@@ -6,6 +6,12 @@ already unit tested on its own (test_eligibility.py). Catalogue entries here mir
 the real bulk shape: prereq_tree is always None, prerequisite_text is the only
 zero-network signal for whether a module is gated - matching what load_catalogue()
 actually returns live (see src/tools/nusmods.py).
+
+W2.1b's shortlist() (src/tools/retrieval.py, its own real Bedrock call) is mocked
+here too - none of these tests set state["readiness"], so module_node's fallback
+path (no gap, no shortlist call at all) is what runs, same as before W2.1b was
+reinstated. The dedicated shortlist-path tests near the bottom set readiness and
+mock module_agent.shortlist directly.
 """
 
 from __future__ import annotations
@@ -13,7 +19,15 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import src.agents.module as module_agent
-from src.state import CompletedModule, SourceName, StudentProfile
+from src.state import (
+    CompletedModule,
+    Dimension,
+    DimensionScore,
+    Gap,
+    Readiness,
+    SourceName,
+    StudentProfile,
+)
 from src.tools.nusmods import NUSModsModule
 
 
@@ -34,6 +48,13 @@ def _profile(completed: list[CompletedModule]) -> StudentProfile:
         major="Computer Science",
         target_role="backend_infrastructure",
         completed_modules=completed,
+    )
+
+
+def _readiness(label: str = "Systems depth") -> Readiness:
+    return Readiness(
+        dimensions=[DimensionScore(dimension=Dimension.SYSTEMS, score=0.3, rationale="x")],
+        gaps=[Gap(dimension=Dimension.SYSTEMS, label=label, priority=1, current=0.2, target=0.8)],
     )
 
 
@@ -151,3 +172,74 @@ def test_module_node_caps_at_max_candidates_scored():
         result = module_agent.module_node(state)
 
     assert len(result["candidates"]) == module_agent.MAX_CANDIDATES_SCORED
+
+
+# --- W2.1b shortlist wiring ---------------------------------------------------
+
+
+def test_with_a_gap_present_the_whole_catalogue_is_scanned_then_shortlisted():
+    """Scan cap must be off when there's a gap to rank against - shortlist(), not
+    catalogue order, decides what survives to MAX_CANDIDATES_SCORED."""
+    catalogue = [_catalogue_module(f"CS{i}") for i in range(module_agent.MAX_CANDIDATES_SCORED + 10)]
+    state = {"profile": _profile([]), "readiness": _readiness()}
+
+    with patch.object(module_agent, "load_catalogue", return_value=catalogue), patch.object(
+        module_agent, "CACHE_PATH"
+    ) as mock_cache_path, patch.object(
+        module_agent, "shortlist", return_value=(["CS0", "CS1"], False)
+    ) as mock_shortlist:
+        mock_cache_path.exists.return_value = False
+        result = module_agent.module_node(state)
+
+    (gap_text, eligible_ids, k), _ = mock_shortlist.call_args
+    assert gap_text == "Systems depth (systems)"
+    assert len(eligible_ids) == module_agent.MAX_CANDIDATES_SCORED + 10  # full scan, no early cap
+    assert k == module_agent.SHORTLIST_K
+    assert [c.id for c in result["candidates"]] == ["nusmods:CS0", "nusmods:CS1"]
+    assert "shortlisted to 2 against 'Systems depth (systems)'" in result["trace"][0].message
+
+
+def test_shortlist_fallback_appends_its_own_trace_event():
+    catalogue = [_catalogue_module("CS1010")]
+    state = {"profile": _profile([]), "readiness": _readiness()}
+
+    with patch.object(module_agent, "load_catalogue", return_value=catalogue), patch.object(
+        module_agent, "CACHE_PATH"
+    ) as mock_cache_path, patch.object(
+        module_agent, "shortlist", return_value=(["CS1010"], True)
+    ):
+        mock_cache_path.exists.return_value = False
+        result = module_agent.module_node(state)
+
+    assert len(result["trace"]) == 2
+    assert "fell back to catalogue order" in result["trace"][1].message
+
+
+def test_no_readiness_skips_shortlist_entirely():
+    catalogue = [_catalogue_module("CS1010")]
+    state = {"profile": _profile([])}  # no "readiness" key at all
+
+    with patch.object(module_agent, "load_catalogue", return_value=catalogue), patch.object(
+        module_agent, "CACHE_PATH"
+    ) as mock_cache_path, patch.object(module_agent, "shortlist") as mock_shortlist:
+        mock_cache_path.exists.return_value = False
+        module_agent.module_node(state)
+
+    mock_shortlist.assert_not_called()
+
+
+def test_readiness_with_no_eligible_modules_skips_shortlist():
+    catalogue = [_catalogue_module("CS3210", prerequisite_text="must have completed CS2106")]
+    state = {"profile": _profile([]), "readiness": _readiness()}
+    detail = _detail_module("CS3210", prereq_tree={"or": ["CS2106"]})
+
+    with patch.object(module_agent, "load_catalogue", return_value=catalogue), patch.object(
+        module_agent, "fetch_module_detail", return_value=detail
+    ), patch.object(module_agent, "CACHE_PATH") as mock_cache_path, patch.object(
+        module_agent, "shortlist"
+    ) as mock_shortlist:
+        mock_cache_path.exists.return_value = True
+        result = module_agent.module_node(state)
+
+    mock_shortlist.assert_not_called()
+    assert result["candidates"] == []
