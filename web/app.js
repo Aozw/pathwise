@@ -276,7 +276,54 @@ function renderOnboarding(v) {
       </div>
     </div>
     <div style="display:flex;justify-content:flex-end;gap:12px">
-      <button type="button" class="btn btn-primary" onclick="goStep(3)">Continue${icon(ICON_ARROW, 14)}</button>
+      <button type="button" class="btn btn-primary" onclick="goStep(2)">Continue${icon(ICON_ARROW, 14)}</button>
+    </div>`;
+  const step2 = `
+    <span style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-accent-700)">Step 2 of 3</span>
+    <h1 style="font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:34px;margin:8px 0 10px">Review what we found</h1>
+    <p style="font-size:15px;max-width:62ch;color:var(--color-neutral-700);margin:0 0 30px">Parsed from the fixture transcript and resume named on the previous step — this is the exact profile your agent plans against, not a preview of a real upload.</p>
+    <div style="display:grid;grid-template-columns:290px 1fr;gap:20px;margin-bottom:26px">
+      <div class="card" style="padding:20px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><div class="card-kicker">Documents</div><span class="tag tag-neutral" style="font-size:10px">Fixture data</span></div>
+        <div style="display:flex;flex-direction:column;gap:12px;margin-top:14px">
+          <div style="display:flex;align-items:center;gap:10px">
+            ${icon(ICON_CHECK, 17).replace('stroke="currentColor"', 'stroke="var(--color-accent-700)"')}
+            <div><div style="font-size:13.5px">transcript.txt (fixture)</div><div style="font-size:11.5px;color:var(--color-neutral-600)">Parsed · 18 modules found</div></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px">
+            ${icon(ICON_CHECK, 17).replace('stroke="currentColor"', 'stroke="var(--color-accent-700)"')}
+            <div><div style="font-size:13.5px">resume.txt (fixture)</div><div style="font-size:11.5px;color:var(--color-neutral-600)">Parsed · 12 skills extracted</div></div>
+          </div>
+        </div>
+        <div class="hr" style="margin:18px 0"></div>
+        <button type="button" class="btn btn-ghost btn-block" style="font-size:12.5px" onclick="goStep(1)">Upload another file</button>
+        <p style="margin:12px 0 0;font-size:11px;color:var(--color-neutral-600);line-height:1.5">Module codes are validated against the NUSMods catalogue on parse.</p>
+      </div>
+      <div class="card" style="padding:24px">
+        <div class="card-kicker">Auto-filled profile</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px">
+          <div class="field"><label>Full name</label><input class="input" value="Tan Wei Ling" disabled></div>
+          <div class="field"><label>Year</label><input class="input" value="Year 2" disabled></div>
+          <div class="field"><label>Major</label><input class="input" value="Computer Science" disabled></div>
+          <div class="field"><label>Units completed</label><input class="input" value="72 / 160" disabled></div>
+        </div>
+        <div style="margin-top:18px">
+          <label style="font-size:12.5px;color:var(--color-neutral-700);display:block;margin-bottom:8px">Completed modules (18)</label>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
+            <span class="tag tag-outline">CS1101S</span><span class="tag tag-outline">CS1231S</span><span class="tag tag-outline">MA1521</span><span class="tag tag-outline">GEA1000</span><span class="tag tag-outline">CS2030S</span><span class="tag tag-outline">CS2040S</span><span class="tag tag-neutral">+12 more</span>
+          </div>
+        </div>
+        <div style="margin-top:18px">
+          <label style="font-size:12.5px;color:var(--color-neutral-700);display:block;margin-bottom:8px">Skills extracted from resume</label>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
+            <span class="tag tag-accent">Java</span><span class="tag tag-accent">Python</span><span class="tag tag-accent">JavaScript</span><span class="tag tag-accent">SQL</span><span class="tag tag-accent">Flask</span><span class="tag tag-accent">Spring Boot</span><span class="tag tag-accent">React</span><span class="tag tag-accent">Flutter</span><span class="tag tag-accent">Git</span><span class="tag tag-accent">Docker</span><span class="tag tag-accent">pytest</span><span class="tag tag-accent">Postman</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:12px">
+      <button type="button" class="btn btn-ghost" onclick="goStep(1)">Back</button>
+      <button type="button" class="btn btn-primary" onclick="goStep(3)">Looks right${icon(ICON_ARROW, 14)}</button>
     </div>`;
   const step3 = `
     <span style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-accent-700)">Step 3 of 3</span>
@@ -284,7 +331,7 @@ function renderOnboarding(v) {
     <p style="font-size:15px;max-width:62ch;color:var(--color-neutral-700);margin:0 0 30px">This calls the deployed agent for real: it parses the fixture profile, assesses readiness across five dimensions, dispatches the Module/Event/Project agents, scores every candidate against your priority gaps, and pauses for your approval before anything is added to your roadmap.</p>
     ${v.error ? `<div class="card" style="padding:14px 16px;margin-bottom:20px;border-color:var(--color-accent-500)"><p style="margin:0;font-size:13px;color:var(--color-accent-700)">${v.error}</p></div>` : ''}
     <div style="display:flex;justify-content:flex-end;gap:12px">
-      <button type="button" class="btn btn-ghost" onclick="goStep(1)">Back</button>
+      <button type="button" class="btn btn-ghost" onclick="goStep(2)">Back</button>
       <button type="button" class="btn btn-primary" ${v.loading ? 'disabled' : ''} onclick="startPlan()">${v.loading ? 'Running the agent…' : 'Build my plan'}${v.loading ? '' : icon(ICON_ARROW, 14)}</button>
     </div>`;
   return `<div style="width:100%;height:100%;overflow:auto">
@@ -295,9 +342,11 @@ function renderOnboarding(v) {
       <div style="display:flex;gap:22px;align-items:center;margin-bottom:26px;flex-wrap:wrap">
         <button type="button" class="stepdot" onclick="goStep(1)" style="color:${v.step1Color}"><span style="width:20px;height:20px;border-radius:50%;border:1px solid ${v.step1Color};display:inline-flex;align-items:center;justify-content:center;font-size:11px">1</span>Documents</button>
         <span style="width:26px;height:1px;background:var(--color-divider)"></span>
-        <button type="button" class="stepdot" onclick="goStep(3)" style="color:${v.step3Color}"><span style="width:20px;height:20px;border-radius:50%;border:1px solid ${v.step3Color};display:inline-flex;align-items:center;justify-content:center;font-size:11px">2</span>Build plan</button>
+        <button type="button" class="stepdot" onclick="goStep(2)" style="color:${v.step2Color}"><span style="width:20px;height:20px;border-radius:50%;border:1px solid ${v.step2Color};display:inline-flex;align-items:center;justify-content:center;font-size:11px">2</span>Review</button>
+        <span style="width:26px;height:1px;background:var(--color-divider)"></span>
+        <button type="button" class="stepdot" onclick="goStep(3)" style="color:${v.step3Color}"><span style="width:20px;height:20px;border-radius:50%;border:1px solid ${v.step3Color};display:inline-flex;align-items:center;justify-content:center;font-size:11px">3</span>Build plan</button>
       </div>
-      <div>${v.isStep1 ? step1 : step3}</div>
+      <div>${v.isStep1 ? step1 : v.isStep2 ? step2 : step3}</div>
     </div>
   </div>`;
 }
@@ -557,8 +606,9 @@ function computeVals() {
   const s = state;
   const b = s.backend || {};
   return {
-    isStep1: s.step === 1, isStep3: s.step === 3,
+    isStep1: s.step === 1, isStep2: s.step === 2, isStep3: s.step === 3,
     step1Color: s.step === 1 ? 'var(--color-accent-700)' : 'var(--color-neutral-600)',
+    step2Color: s.step === 2 ? 'var(--color-accent-700)' : 'var(--color-neutral-600)',
     step3Color: s.step === 3 ? 'var(--color-accent-700)' : 'var(--color-neutral-600)',
     loading: s.loading, error: s.error,
     backend: b, profile: b.profile || null,
