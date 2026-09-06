@@ -23,6 +23,15 @@ OAC_NAME = "pathwise-agent-proxy-oac"
 DIST_COMMENT = "pathwise-agent-proxy"
 REGION = "us-east-1"  # CloudFront is global but its control API lives here
 
+# CloudFront's own default (30s) matches the Lambda's old default Timeout, so the full
+# planner -> module/event/project agents -> scoring chain would occasionally lose the
+# race against both at once: CloudFront generates its own 504 error page with no CORS
+# headers, which the browser reports as "TypeError: Failed to fetch" - see
+# infra/lambda_handler.py's CORS_HEADERS docstring for why that's the misleading part.
+# 60 is the ceiling AWS allows without a support-ticket limit increase; keep it in step
+# with FUNCTION_TIMEOUT_SECONDS in deploy_lambda.py.
+ORIGIN_READ_TIMEOUT_SECONDS = 60
+
 
 def get_function_url_domain(lam) -> str:
     cfg = lam.get_function_url_config(FunctionName=FUNCTION_NAME)
@@ -59,10 +68,33 @@ def find_existing_distribution(cf) -> dict | None:
     return None
 
 
+def ensure_origin_timeout(cf, dist_id: str) -> None:
+    """Reconcile OriginReadTimeout on an already-created distribution.
+
+    ensure_distribution() only sets this at creation time, so a distribution created
+    before ORIGIN_READ_TIMEOUT_SECONDS existed (or before it changed) needs its own
+    update path - the same reason deploy_lambda.py's ensure_function() has both a
+    create and an update branch.
+    """
+    config_resp = cf.get_distribution_config(Id=dist_id)
+    config = config_resp["DistributionConfig"]
+    origin = config["Origins"]["Items"][0]
+    custom_origin = origin["CustomOriginConfig"]
+    if custom_origin.get("OriginReadTimeout") == ORIGIN_READ_TIMEOUT_SECONDS:
+        print(f"Distribution {dist_id} origin read timeout already {ORIGIN_READ_TIMEOUT_SECONDS}s")
+        return
+
+    custom_origin["OriginReadTimeout"] = ORIGIN_READ_TIMEOUT_SECONDS
+    custom_origin["OriginKeepaliveTimeout"] = max(custom_origin.get("OriginKeepaliveTimeout", 5), 5)
+    cf.update_distribution(Id=dist_id, IfMatch=config_resp["ETag"], DistributionConfig=config)
+    print(f"Updated distribution {dist_id}: origin read timeout -> {ORIGIN_READ_TIMEOUT_SECONDS}s")
+
+
 def ensure_distribution(cf, origin_domain: str, oac_id: str) -> dict:
     existing = find_existing_distribution(cf)
     if existing:
         print(f"Reusing existing distribution {existing['Id']} ({existing['DomainName']})")
+        ensure_origin_timeout(cf, existing["Id"])
         return existing
 
     origin_id = "pathwise-agent-proxy-lambda"
@@ -81,6 +113,7 @@ def ensure_distribution(cf, origin_domain: str, oac_id: str) -> dict:
                     "HTTPSPort": 443,
                     "OriginProtocolPolicy": "https-only",
                     "OriginSslProtocols": {"Quantity": 1, "Items": ["TLSv1.2"]},
+                    "OriginReadTimeout": ORIGIN_READ_TIMEOUT_SECONDS,
                 },
             }],
         },
