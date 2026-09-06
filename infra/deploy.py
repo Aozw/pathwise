@@ -16,7 +16,10 @@ whatever is checked out locally:
        distribution in front of the Lambda (idempotent; a no-op after the
        first run unless the Function URL itself changed).
     4. `deploy_web.deploy_web()` — uploads the real `web/` frontend to S3,
-       wiring `app.js` at the CloudFront domain from step 3.
+       wiring `app.js` at the CloudFront domain from step 3, then fronts the
+       site itself with its own CloudFront distribution (see
+       `deploy_web_cloudfront.py`) so it's reachable over HTTPS - required
+       for `web/app.js`'s `crypto.subtle.digest()` call to work at all.
 
 Each step is idempotent on its own (see their module docstrings), which is
 what makes running all four unconditionally on every redeploy cheap enough
@@ -111,9 +114,9 @@ def main() -> None:
     site_url = deploy_web(cloudfront_domain)
 
     print("\nDeploy complete.")
-    print(f"  Function URL:      {function_url}")
-    print(f"  CloudFront domain: https://{cloudfront_domain}")
-    print(f"  Site URL:          {site_url}")
+    print(f"  Function URL:          {function_url}")
+    print(f"  API CloudFront domain: https://{cloudfront_domain}")
+    print(f"  Site URL:              {site_url}")
     print(
         "\nCloudFront propagation can take 5-15 minutes after its first creation; "
         "a plain code/content update is faster."
