@@ -36,6 +36,15 @@ depending on which step happened to touch AWS first. Step 0 fixes that and
 turns the other common failure (the access portal's temporary credentials
 expire every 12 hours) into one clear message instead of a stack trace.
 
+`agentcore launch` also builds a fresh runtime environment for the deployed
+container - it does not inherit this process's environment or read `.env`,
+so `src/config.py`'s `MODEL_HAIKU` / `MODEL_SONNET` (no safe default; an
+empty string) never reached the deployed agent either. Every Bedrock call
+in the deployed agent failed with "Invalid length for parameter modelId,
+value: 0", which cascaded into every node's fallback path, including
+scoring - so `ranked` came back empty regardless of `SCORE_THRESHOLD`.
+Step 1 now forwards both via `agentcore launch --env`.
+
 Usage:
     python infra/deploy.py
 """
@@ -59,6 +68,10 @@ from deploy_web import deploy_web  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REQUIRED_ENV_VARS = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REGION")
+
+# Forwarded to the deployed agent via `agentcore launch --env`. Both are read by
+# src/config.py with no safe default (an empty string), so a run scores nothing.
+MODEL_ENV_VARS = ("MODEL_HAIKU", "MODEL_SONNET")
 
 
 def missing_env_vars(environ: dict[str, str]) -> list[str]:
@@ -95,8 +108,16 @@ def _ensure_credentials() -> None:
 
 def relaunch_agent() -> None:
     print("\n=== 1/4  agentcore launch ===")
+    missing = [name for name in MODEL_ENV_VARS if not os.environ.get(name)]
+    if missing:
+        sys.exit(
+            f"Missing from .env (or empty): {', '.join(missing)}. Run "
+            "scripts/verify_aws.py and paste the exact model ids it prints - see "
+            "src/config.py's MODEL_HAIKU/MODEL_SONNET comments."
+        )
+    env_args = [arg for name in MODEL_ENV_VARS for arg in ("--env", f"{name}={os.environ[name]}")]
     try:
-        subprocess.run(["agentcore", "launch"], cwd=REPO_ROOT, check=True)
+        subprocess.run(["agentcore", "launch", *env_args], cwd=REPO_ROOT, check=True)
     except FileNotFoundError:
         sys.exit(
             "`agentcore` CLI not found on PATH. Install the AgentCore starter "
