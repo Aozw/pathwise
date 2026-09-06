@@ -57,6 +57,14 @@ SCORE_THRESHOLD = 0.55  # below this a candidate is not shown
 TOOL_TIMEOUT_SECONDS = 8
 TOOL_RETRIES = 1  # one retry, then fall back to the fixture
 
+# The score node's one batched Bedrock call judges up to MAX_CANDIDATES_SCORED
+# candidates in a single structured-output response (up to 4000 output tokens),
+# which measured ~12s end to end during Step 15 verification - several times
+# TOOL_TIMEOUT_SECONDS, which is sized for a single lightweight tool call. Reusing
+# that constant here made the score call time out on every real run, so it never
+# had anything but the neutral-default fallback and `ranked` stayed empty.
+SCORE_TIMEOUT_SECONDS = 30
+
 # ---------------------------------------------------------------------------
 # Scoring. gap_coverage and role_fit come from the model; the other two are
 # computed in Python. redundancy_penalty is subtracted, everything else added.

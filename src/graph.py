@@ -61,6 +61,7 @@ from src.config import (
     MODEL_HAIKU,
     NEVER_AUTOMATED_ACTIONS,
     SCORE_THRESHOLD,
+    SCORE_TIMEOUT_SECONDS,
     TOOL_RETRIES,
     TOOL_TIMEOUT_SECONDS,
 )
@@ -133,7 +134,7 @@ _SCORE_TOOL_SCHEMA = {
 # own TraceEvent, matching the pattern in agents/planner.py.
 _SCORE_BOTO_CONFIG = BotoConfig(
     connect_timeout=TOOL_TIMEOUT_SECONDS,
-    read_timeout=TOOL_TIMEOUT_SECONDS,
+    read_timeout=SCORE_TIMEOUT_SECONDS,
     retries={"max_attempts": 1},
 )
 
