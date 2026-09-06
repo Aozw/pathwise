@@ -241,8 +241,20 @@ def _score_node(state: RunState) -> dict:
     evidence in (StudentProfile.evidence). Until W3.2/W3.3 populate `evidence` the
     penalty evaluates to 0, but the path is live and the matching is dimension-based,
     so it does not depend on resume text and gap labels sharing a vocabulary.
+
+    A candidate the student has already logged an Outcome against (accepted,
+    rejected or withdrew - whichever) is dropped here, deterministically, before
+    scoring even runs: re-surfacing something already decided isn't a fresh
+    recommendation, and a sub-agent re-running on the next refine iteration has no
+    way to know not to hand it back. This is also what guarantees a re-plan changes
+    `ranked` rather than depending on the planner's dispatch choice alone - see
+    planner.py's docstring for how the planner separately reads outcomes for the
+    dispatch decision itself.
     """
-    candidates = state.get("candidates", [])[:MAX_CANDIDATES_SCORED]
+    decided_ids = {outcome.candidate_id for outcome in state.get("outcomes", [])}
+    all_candidates = state.get("candidates", [])
+    already_decided = sum(1 for c in all_candidates if c.id in decided_ids)
+    candidates = [c for c in all_candidates if c.id not in decided_ids][:MAX_CANDIDATES_SCORED]
     profile = state["profile"]
     readiness = state["readiness"]
 
@@ -300,6 +312,17 @@ def _score_node(state: RunState) -> dict:
             ranked.append(scored.model_copy(update={"scores": scores}))
 
     ranked.sort(key=lambda c: c.scores.total, reverse=True)
+    if already_decided:
+        trace.append(
+            TraceEvent(
+                kind=TraceKind.CHANGED,
+                agent="Career Agent",
+                message=f"Excluded {already_decided} candidate(s) the student already logged "
+                "an outcome on",
+                detail="A candidate the student has decided on - accepted, rejected or "
+                "withdrew - is not offered again as a fresh recommendation.",
+            )
+        )
     trace.append(
         TraceEvent(
             kind=TraceKind.DECIDED,

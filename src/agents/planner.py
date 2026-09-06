@@ -26,7 +26,16 @@ from pydantic import BaseModel, ValidationError
 
 from src.config import AGENT_NAMES, AWS_REGION, MODEL_HAIKU, TOOL_RETRIES, TOOL_TIMEOUT_SECONDS
 from src.metrics import ModelCallStats, apply_model_call, token_usage
-from src.state import Readiness, RunMetrics, RunState, StudentProfile, TraceEvent, TraceKind
+from src.state import (
+    Candidate,
+    Outcome,
+    Readiness,
+    RunMetrics,
+    RunState,
+    StudentProfile,
+    TraceEvent,
+    TraceKind,
+)
 
 _TOOL_NAME = "plan"
 
@@ -87,17 +96,39 @@ class PlannerDecision(BaseModel):
     rationale: str
 
 
-def _build_prompt(profile: StudentProfile, readiness: Readiness) -> str:
+_KIND_TO_AGENT = {"module": "Module Agent", "hackathon": "Event Agent", "project": "Project Agent"}
+
+
+def _describe_outcome(outcome: Outcome, candidates: list[Candidate]) -> str:
+    match = next((c for c in candidates if c.id == outcome.candidate_id), None)
+    if match is None:
+        return f"{outcome.candidate_id} ({outcome.result})"
+    agent = _KIND_TO_AGENT.get(match.kind.value, match.kind.value)
+    return f"'{match.title}' from {agent} ({outcome.result})"
+
+
+def _build_prompt(
+    profile: StudentProfile,
+    readiness: Readiness,
+    outcomes: list[Outcome],
+    candidates: list[Candidate],
+) -> str:
     gap_lines = "\n".join(
         f"  {gap.priority}. {gap.label} ({gap.dimension}): "
         f"current {gap.current:.2f}, target {gap.target:.2f}, size {gap.size:.2f}"
         for gap in readiness.gaps
     )
     evidence_line = ", ".join(sorted(profile.evidence_labels)) or "none recorded"
+    outcome_lines = (
+        "\n".join(f"  - {_describe_outcome(o, candidates)}" for o in outcomes)
+        if outcomes
+        else "  none yet - this is the first plan for this run"
+    )
     return (
         f"Student: {profile.year}th year {profile.major}, targeting {profile.target_role}.\n"
         f"Evidence already held: {evidence_line}\n"
         f"Ranked priority gaps (1 is highest):\n{gap_lines}\n\n"
+        f"Outcomes the student has logged on earlier suggestions:\n{outcome_lines}\n\n"
         "Three agents are available, each sourcing one specific kind of candidate:\n"
         "  Module Agent  - NUS modules (coursework) from NUSMods\n"
         "  Event Agent   - hackathons from Devpost\n"
@@ -105,8 +136,12 @@ def _build_prompt(profile: StudentProfile, readiness: Readiness) -> str:
         "Decide which to dispatch this turn. Dispatch an agent only if its specific kind "
         "of candidate could plausibly close one of the priority gaps above better than "
         "evidence the student already holds. Skip the rest, with a specific reason per "
-        "skip that refers to what that agent actually sources. Call the plan tool with "
-        "your decision."
+        "skip that refers to what that agent actually sources. A logged outcome above is "
+        "new information, not noise: a rejection or withdrawal on one agent's candidate is "
+        "a reason to weigh dispatching that same agent again (a different candidate from it "
+        "may still work) against shifting emphasis toward another agent that could close the "
+        "same gap - decide per gap, not by a blanket rule. Call the plan tool with your "
+        "decision."
     )
 
 
@@ -164,11 +199,13 @@ def _fallback_decision() -> PlannerDecision:
 def planner_node(state: RunState) -> dict:
     profile = state["profile"]
     readiness = state["readiness"]
+    outcomes = state.get("outcomes", [])
+    candidates = state.get("candidates", [])
     metrics = state.get("metrics") or RunMetrics()
 
     trace: list[TraceEvent] = []
     try:
-        decision, stats = _call_bedrock(_build_prompt(profile, readiness))
+        decision, stats = _call_bedrock(_build_prompt(profile, readiness, outcomes, candidates))
     except RuntimeError as exc:
         decision = _fallback_decision()
         stats = ModelCallStats()  # a failed call recorded no tokens or validations
