@@ -6,3 +6,6 @@ data/runs/
 data/profiles/
 *.pyc
 .aws/
+infra/.build/
+infra/.build.zip
+.bedrock_agentcore/
