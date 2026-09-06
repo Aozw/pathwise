@@ -168,6 +168,7 @@ async function confirmLog() {
 
 function goDash() { setState({ screen: 'dashboard' }); }
 function goStudy() { setState({ screen: 'study' }); }
+function goProjects() { setState({ screen: 'projects' }); }
 function goHack() { setState({ screen: 'hackathons' }); }
 function goIntern() { setState({ screen: 'internships' }); }
 function goOnboarding() { setState({ screen: 'onboarding', step: 1, uploads: { ...NO_UPLOADS }, dragOver: { ...NO_DRAG } }); }
@@ -219,6 +220,7 @@ function icon(paths, size, extra) {
 const ICON_DASH = '<rect x="3" y="3" width="7" height="9"></rect><rect x="14" y="3" width="7" height="5"></rect><rect x="14" y="12" width="7" height="9"></rect><rect x="3" y="16" width="7" height="5"></rect>';
 const ICON_STUDY = '<path d="M12 7v14"></path><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"></path>';
 const ICON_HACK = '<path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"></path><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"></path><path d="M4 22h16"></path><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"></path><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"></path><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"></path>';
+const ICON_PROJECTS = '<polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline>';
 const ICON_INTERN = '<rect width="20" height="14" x="2" y="6" rx="2"></rect><path d="M16 20V6a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v14"></path><path d="M2 12h20"></path>';
 const ICON_GEAR = '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle>';
 const ICON_SPARK = '<path d="m12 3-1.9 5.8a2 2 0 0 1-1.287 1.288L3 12l5.8 1.9a2 2 0 0 1 1.288 1.287L12 21l1.9-5.8a2 2 0 0 1 1.287-1.288L21 12l-5.8-1.9a2 2 0 0 1-1.288-1.287z"></path>';
@@ -415,6 +417,7 @@ function renderSidebar(v) {
     <div style="font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:20px;letter-spacing:.02em;padding:0 8px;margin-bottom:26px">Pathwise</div>
     ${navItem('Dashboard', 'dashboard', ICON_DASH, state.screen, 'goDash')}
     ${navItem('Study Plan', 'study', ICON_STUDY, state.screen, 'goStudy')}
+    ${navItem('Personal Projects', 'projects', ICON_PROJECTS, state.screen, 'goProjects')}
     ${navItem('Hackathons', 'hackathons', ICON_HACK, state.screen, 'goHack')}
     ${navItem('Internships', 'internships', ICON_INTERN, state.screen, 'goIntern')}
     <div style="flex:1"></div>
@@ -548,14 +551,11 @@ function renderHackathons(v) {
 }
 
 function renderStudy(v) {
-  const modules = candidateScreen(v, 'module', 'Study Plan', 'Ranked by the gap each module closes, prerequisites checked against the parsed transcript');
-  const projects = (v.backend.ranked || []).filter(c => c.kind === 'project');
-  return modules.replace('</div>', `
-    <div style="display:flex;align-items:baseline;gap:10px;margin:32px 0 6px">${icon(ICON_SPARK, 16).replace('stroke="currentColor"', 'stroke="var(--color-accent-700)"')}<h2 style="font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:18px;margin:0">Project targets from GitHub Search</h2></div>
-    <div style="display:flex;flex-direction:column;gap:14px">
-      ${projects.length ? projects.map((c, i) => candidateCard(v, c, i + 1)).join('') : '<p style="font-size:13px;color:var(--color-neutral-600)">No project candidates scored above threshold on this run.</p>'}
-    </div>
-  </div>`);
+  return candidateScreen(v, 'module', 'Study Plan', 'Ranked by the gap each module closes, prerequisites checked against the parsed transcript');
+}
+
+function renderProjects(v) {
+  return candidateScreen(v, 'project', 'Personal Projects', 'Ranked by the gap each project closes, sourced from GitHub Search with a fixture fallback');
 }
 
 function renderInternships() {
@@ -684,6 +684,7 @@ function render() {
   const screenBody = state.screen === 'dashboard' ? renderDashboard(v)
     : state.screen === 'hackathons' ? renderHackathons(v)
     : state.screen === 'internships' ? renderInternships(v)
+    : state.screen === 'projects' ? renderProjects(v)
     : renderStudy(v);
   root.innerHTML = `<div style="display:flex;height:100%;width:100%">
     ${renderSidebar(v)}
