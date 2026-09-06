@@ -46,7 +46,16 @@ def _all_dimensions(score: float) -> _ReadinessExtracted:
 # --- deterministic assessor --------------------------------------------------
 
 
-def test_deterministic_assessment_scores_all_five_dimensions():
+def test_deterministic_assessment_scores_all_five_dimensions(monkeypatch: pytest.MonkeyPatch):
+    # Force the fallback path rather than relying on Bedrock being unreachable: this
+    # test previously called assess_readiness() with no mock, which only "worked" because
+    # CI has no AWS credentials. Locally, with valid credentials, the live call succeeds
+    # and used_fallback is False, which both fails the test and violates the
+    # never-call-Bedrock-from-a-test rule.
+    def boom(_p):
+        raise RuntimeError("readiness Bedrock call failed after retry")
+
+    monkeypatch.setattr(profile_mod, "_call_readiness_bedrock", boom)
     result = assess_readiness(_profile())  # no evidence, no modules -> deterministic
     assert {d.dimension for d in result.readiness.dimensions} == set(Dimension)
     assert result.used_fallback is True
