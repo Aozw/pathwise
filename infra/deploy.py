@@ -3,6 +3,9 @@
 Chains every step needed to bring the deployed system up to date with
 whatever is checked out locally:
 
+    0. Load `.env` and confirm AWS credentials are present and not expired,
+       so everyone hits the same one clear error instead of whatever each
+       step's own tool happens to raise. See `_ensure_credentials()`.
     1. `agentcore launch` — rebuilds and pushes the AgentCore Runtime
        container for `src/entrypoint.py`, updating the existing agent
        recorded in `.bedrock_agentcore.yaml` rather than creating a new one.
@@ -21,15 +24,29 @@ to actually do. Per PLAN.md W4.6 / CHECKLIST.md Step 14: if redeploying
 takes more than one command, people stop doing it and the deployed version
 drifts from `main`.
 
+This script never used to load `.env` itself — `src/config.py` calls
+`load_dotenv()`, but this script never imports it, so `.env`'s AWS_* values
+never reached this process or the `agentcore launch` subprocess it shells
+out to, even with a fully filled-in `.env`. That surfaced as `agentcore`'s
+own "No AWS credentials found" or a bare boto3 traceback deep inside step 2,
+depending on which step happened to touch AWS first. Step 0 fixes that and
+turns the other common failure (the access portal's temporary credentials
+expire every 12 hours) into one clear message instead of a stack trace.
+
 Usage:
     python infra/deploy.py
 """
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
+
+import boto3
+from botocore.exceptions import ClientError, NoCredentialsError
+from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -38,10 +55,38 @@ from deploy_lambda import deploy_lambda  # noqa: E402
 from deploy_web import deploy_web  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+REQUIRED_ENV_VARS = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REGION")
+
+
+def missing_env_vars(environ: dict[str, str]) -> list[str]:
+    """Pure so it's unit testable without touching the real environment."""
+    return [name for name in REQUIRED_ENV_VARS if not environ.get(name)]
+
+
+def _ensure_credentials() -> None:
+    print("=== 0/4  credentials ===")
+    load_dotenv()
+
+    missing = missing_env_vars(os.environ)
+    if missing:
+        sys.exit(
+            f"Missing from .env (or empty): {', '.join(missing)}. Copy fresh values "
+            "from the AWS access portal — see .env.example for exactly where."
+        )
+
+    try:
+        identity = boto3.client("sts", region_name=os.environ["AWS_REGION"]).get_caller_identity()
+    except (ClientError, NoCredentialsError) as exc:
+        sys.exit(
+            f"AWS rejected the credentials in .env ({exc}). These are temporary STS "
+            "credentials that expire every 12 hours — log back into the access portal "
+            "and paste fresh values into .env, per .env.example."
+        )
+    print(f"  authenticated as {identity['Arn']}")
 
 
 def relaunch_agent() -> None:
-    print("=== 1/4  agentcore launch ===")
+    print("\n=== 1/4  agentcore launch ===")
     try:
         subprocess.run(["agentcore", "launch"], cwd=REPO_ROOT, check=True)
     except FileNotFoundError:
@@ -53,6 +98,7 @@ def relaunch_agent() -> None:
 
 
 def main() -> None:
+    _ensure_credentials()
     relaunch_agent()
 
     print("\n=== 2/4  Lambda proxy ===")
