@@ -41,6 +41,11 @@ MODEL_HAIKU = os.environ.get("MODEL_HAIKU", "")
 # Try Haiku first. Every Sonnet call is roughly an order of magnitude more expensive.
 MODEL_SONNET = os.environ.get("MODEL_SONNET", "")
 
+# W2.1b's module embedding index (offline build) and the single per-query embedding
+# call at runtime (src/tools/retrieval.py) both use this. Confirmed available
+# ON_DEMAND in this account's region via `bedrock list-foundation-models`.
+MODEL_EMBEDDING = os.environ.get("MODEL_EMBEDDING", "amazon.titan-embed-text-v2:0")
+
 S3_BUCKET = os.environ.get("S3_BUCKET", "pathwise-state")
 S3_STATE_PREFIX = "profiles/"
 S3_RUNS_PREFIX = "runs/"

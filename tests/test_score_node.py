@@ -19,6 +19,7 @@ from src.state import (
     DimensionScore,
     Evidence,
     Gap,
+    Outcome,
     Readiness,
     SourceName,
     StudentProfile,
@@ -119,3 +120,50 @@ def test_fallback_judgment_does_not_invent_closed_gaps():
 
     assert result["ranked"] == []
     assert any("fell back" in event.message for event in result["trace"])
+
+
+# --- outcomes exclusion (fixed after Step 15 found ranking never changed) ----
+
+
+def test_a_candidate_with_a_logged_outcome_is_excluded_deterministically():
+    """This is what guarantees a re-plan actually changes `ranked`, independent of
+    whatever the planner's dispatch decision was or whether a sub-agent re-surfaces
+    the exact same candidate on the next refine iteration."""
+    state = _state(_profile())
+    state["outcomes"] = [Outcome(candidate_id="nusmods:CS3210", result="not_shortlisted")]
+
+    with patch.object(graph, "_call_score_bedrock") as mock_call:
+        result = graph._score_node(state)
+
+    mock_call.assert_not_called()  # nothing left to score once the only candidate is excluded
+    assert result["ranked"] == []
+    assert result["trace"][0].message == "No candidates to score"
+
+
+def test_exclusion_writes_a_trace_event_naming_the_count():
+    other = _candidate("nusmods:CS9999")
+    state = _state(_profile())
+    state["candidates"] = [_candidate(), other]
+    state["outcomes"] = [Outcome(candidate_id="nusmods:CS3210", result="accepted")]
+    decision = graph._ScoreDecision(
+        judgments=[
+            graph._Judgment(candidate_id="nusmods:CS9999", gap_coverage=1.0, role_fit=1.0,
+                             rationale="closes the top gap", closed_gaps=[_GAP])
+        ]
+    )
+
+    with patch.object(graph, "_call_score_bedrock",
+                       return_value=(decision, graph.ModelCallStats())):
+        result = graph._score_node(state)
+
+    assert [c.id for c in result["ranked"]] == ["nusmods:CS9999"]
+    excluded_events = [e for e in result["trace"] if "already logged an outcome" in e.message]
+    assert len(excluded_events) == 1
+    assert "Excluded 1 candidate" in excluded_events[0].message
+
+
+def test_no_outcomes_excludes_nothing():
+    with patch.object(graph, "_call_score_bedrock", return_value=_decision([_GAP])):
+        result = graph._score_node(_state(_profile()))
+
+    assert not any("already logged an outcome" in e.message for e in result["trace"])
