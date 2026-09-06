@@ -1,9 +1,13 @@
 """W4.4 — src/entrypoint.py's onboard/run/approve routing.
 
 The graph itself calls Bedrock; these tests never touch it. They monkeypatch
-src.entrypoint.graph (get_state/invoke) and src.entrypoint.{load_snapshot,save_snapshot}
-so the routing/serialization logic in entrypoint.py is verified in isolation, per the
-CLAUDE.md rule against calling Bedrock or any external API from a test.
+src.entrypoint.graph (get_state/invoke) and
+src.entrypoint.{load_snapshot,save_snapshot,write_run_metrics} so the routing/
+serialization logic in entrypoint.py is verified in isolation, per the CLAUDE.md
+rule against calling Bedrock or any external API from a test - write_run_metrics
+also needs patching even though it never touches the network, since its default
+runs_dir is the repo's real data/runs/, and a test suite should not have side
+effects on the filesystem outside tmp_path.
 """
 
 from __future__ import annotations
@@ -80,6 +84,7 @@ def _patch_graph(monkeypatch, state_values, invoke_result):
 def _patch_snapshot(monkeypatch, load_return=(None, None), save_return=None):
     monkeypatch.setattr(ep, "load_snapshot", lambda run_id: load_return)
     monkeypatch.setattr(ep, "save_snapshot", lambda state: save_return)
+    monkeypatch.setattr(ep, "write_run_metrics", lambda state: None)
 
 
 # --- _build_run_input --------------------------------------------------------
@@ -278,6 +283,7 @@ def test_invoke_strips_interrupt_key_before_snapshotting(monkeypatch):
     _patch_graph(monkeypatch, state_values={}, invoke_result=invoke_result)
     monkeypatch.setattr(ep, "load_snapshot", lambda run_id: (None, None))
     monkeypatch.setattr(ep, "save_snapshot", fake_save)
+    monkeypatch.setattr(ep, "write_run_metrics", lambda state: None)
 
     ep.invoke({"action": "onboard"})
 
@@ -292,7 +298,28 @@ def test_invoke_appends_a_save_snapshot_failure_to_the_trace(monkeypatch):
                                  message="S3 snapshot write failed")
     monkeypatch.setattr(ep, "load_snapshot", lambda run_id: (None, None))
     monkeypatch.setattr(ep, "save_snapshot", lambda state: fallback_event)
+    monkeypatch.setattr(ep, "write_run_metrics", lambda state: None)
 
     out = ep.invoke({"action": "onboard"})
 
     assert any(t["message"] == "S3 snapshot write failed" for t in out["trace"])
+
+
+def test_invoke_writes_run_metrics_alongside_the_snapshot(monkeypatch):
+    """W3.4's write_run_metrics must actually run on the real invoke() path, not
+    just exist as unit-tested-in-isolation dead code."""
+    written = {}
+
+    def fake_write(state):
+        written.update(state)
+        return None
+
+    invoke_result = {"profile": _profile(), "trace": [], "run_id": "r1"}
+    _patch_graph(monkeypatch, state_values={}, invoke_result=invoke_result)
+    monkeypatch.setattr(ep, "load_snapshot", lambda run_id: (None, None))
+    monkeypatch.setattr(ep, "save_snapshot", lambda state: None)
+    monkeypatch.setattr(ep, "write_run_metrics", fake_write)
+
+    ep.invoke({"action": "onboard", "run_id": "r1"})
+
+    assert written["run_id"] == "r1"

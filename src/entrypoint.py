@@ -48,6 +48,7 @@ from langgraph.types import Command, Interrupt  # noqa: E402
 
 from src.config import ROLE_DIMENSION_WEIGHTS  # noqa: E402
 from src.graph import graph  # noqa: E402
+from src.metrics import write_run_metrics  # noqa: E402
 from src.snapshot import load_snapshot, save_snapshot  # noqa: E402
 from src.state import (  # noqa: E402
     Candidate,
@@ -260,6 +261,11 @@ def invoke(payload: dict) -> dict:
     save_fallback = save_snapshot(snapshot_state)
     if save_fallback is not None:
         result["trace"] = [*result.get("trace", []), save_fallback]
+
+    # Overwritten on every call for this run_id, so it always reflects the metrics
+    # accumulated so far - the same "write at run end" pattern as save_snapshot above,
+    # since a demo run is a sequence of onboard/run/approve calls, not one call.
+    write_run_metrics(snapshot_state)
 
     return _serialize(result, run_id)
 
