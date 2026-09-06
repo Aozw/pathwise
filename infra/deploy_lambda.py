@@ -33,6 +33,12 @@ ZIP_PATH = REPO_ROOT / "infra" / ".build.zip"
 FUNCTION_NAME = "pathwise-agent-proxy"
 ROLE_NAME = "pathwise-agent-proxy-role"
 
+# The full onboard/run call chains planner -> module/event/project agents -> scoring,
+# several sequential Bedrock calls deep. That routinely runs past 30s, so both this and
+# CloudFront's OriginReadTimeout (see deploy_cloudfront.py) need to agree on a longer
+# budget - see lambda_handler.py's botocore Config for why 60 isn't itself enough headroom.
+FUNCTION_TIMEOUT_SECONDS = 60
+
 
 def load_agent_arn() -> tuple[str, str]:
     config = yaml.safe_load((REPO_ROOT / ".bedrock_agentcore.yaml").read_text())
@@ -127,7 +133,7 @@ def ensure_function(lam, role_arn: str, agent_arn: str) -> str:
             Role=role_arn,
             Handler="lambda_handler.handler",
             Code={"ZipFile": zip_bytes},
-            Timeout=30,
+            Timeout=FUNCTION_TIMEOUT_SECONDS,
             MemorySize=256,
             Environment=env,
             Description="Proxy in front of AgentCore Runtime — W4.2 deploy spike",
@@ -141,7 +147,7 @@ def ensure_function(lam, role_arn: str, agent_arn: str) -> str:
         waiter.wait(FunctionName=FUNCTION_NAME)
         resp = lam.update_function_configuration(
             FunctionName=FUNCTION_NAME,
-            Timeout=30,
+            Timeout=FUNCTION_TIMEOUT_SECONDS,
             MemorySize=256,
             Environment=env,
         )

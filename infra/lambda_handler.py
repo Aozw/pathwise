@@ -46,7 +46,11 @@ REGION = os.environ.get("AWS_REGION", "us-east-1")
 _client = boto3.client(
     "bedrock-agentcore",
     region_name=REGION,
-    config=Config(connect_timeout=5, read_timeout=25, retries={"max_attempts": 2}),
+    # The Lambda's own Timeout is 60s (see infra/deploy_lambda.py); read_timeout stays
+    # under that so a genuine AgentCore stall hits our except clause below - and its
+    # CORS headers - rather than the Lambda runtime killing the whole invocation with
+    # no chance to respond at all.
+    config=Config(connect_timeout=5, read_timeout=50, retries={"max_attempts": 2}),
 )
 
 
